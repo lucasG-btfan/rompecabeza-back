@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.pyc
+
+# Testing
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+*.sw?
+
+# Secrets — NUNCA subir credenciales
+.env
