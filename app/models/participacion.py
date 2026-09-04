@@ -25,3 +25,4 @@ class Participacion(Base):
 
     partida = relationship("Partida", back_populates="participaciones")
     usuario = relationship("Usuario")
+    hallazgos = relationship("Hallazgo", cascade="all, delete-orphan")

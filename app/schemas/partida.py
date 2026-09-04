@@ -122,3 +122,14 @@ class EncontradaRequest(BaseModel):
 class EncontradaResponse(BaseModel):
     encontrada: bool
     posicion: Optional[dict] = None
+
+
+class ResumenPartidaResponse(BaseModel):
+    """Vista resumida de una partida creada por el usuario, para la lista 'Mis partidas'."""
+    id: UUID
+    codigo: str
+    tipo: str
+    estado: str
+    creado_en: datetime
+    palabras_total: int
+    palabras_encontradas: int

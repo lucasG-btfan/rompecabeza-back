@@ -13,6 +13,7 @@ from app.models.partida import Partida
 from app.models.palabra import Palabra
 from app.models.usuario import Usuario
 from app.models.participacion import Participacion
+from app.models.hallazgo import Hallazgo
 from app.schemas.partida import (
     CrearPartidaRequest,
     CrearPartidaResponse,
@@ -26,8 +27,10 @@ from app.schemas.partida import (
     EncontradaRequest,
     EncontradaResponse,
     PalabraResponse,
+    PalabraCreate,
     PartidaPublicaResponse,
     PalabraPublicaResponse,
+    ResumenPartidaResponse,
 )
 from app.schemas.usuario import RankingEntry, UnirseResponse
 from app.services.sopa_generator import (
@@ -59,6 +62,11 @@ def _get_palabra_o_404(db: Session, partida: Partida, palabra_id: uuid.UUID) -> 
     return palabra
 
 
+def _es_creador(partida: Partida, usuario: Usuario) -> bool:
+    """Devuelve True si el usuario es el creador de la partida."""
+    return partida.creador_id == usuario.id
+
+
 def _requerir_creador(partida: Partida, usuario: Usuario) -> None:
     if partida.creador_id != usuario.id:
         raise HTTPException(
@@ -67,16 +75,35 @@ def _requerir_creador(partida: Partida, usuario: Usuario) -> None:
         )
 
 
-def _estado_response(partida: Partida) -> EstadoPartidaResponse:
-    palabras_estado = [
-        EstadoPalabraResponse(
-            id=p.id,
-            palabra=p.palabra,
-            encontrada=p.encontrada,
-            posicion=p.posicion if p.encontrada else None,
+def _hallazgos_ids(participacion: Optional[Participacion]) -> set[uuid.UUID]:
+    """IDs de palabras que una participación encontró. Si no hay participación
+    (invitado), devuelve vacío: el invitado no tiene progreso persistido."""
+    if participacion is None:
+        return set()
+    return {h.palabra_id for h in participacion.hallazgos}
+
+
+def _estado_response(
+    db: Session, partida: Partida, participacion: Optional[Participacion] = None
+) -> EstadoPartidaResponse:
+    """guarda las palabras encontradas, para invitados no se guarda el resultado de las partidas"""
+    encontradas = _hallazgos_ids(participacion)
+    posiciones_por_palabra: dict[uuid.UUID, dict] = {}
+    if participacion is not None:
+        for h in participacion.hallazgos:
+            posiciones_por_palabra[h.palabra_id] = h.posicion
+
+    palabras_estado = []
+    for p in partida.palabras:
+        posicion = p.posicion if p.id in encontradas else None
+        palabras_estado.append(
+            EstadoPalabraResponse(
+                id=p.id,
+                palabra=p.palabra,
+                encontrada=p.id in encontradas,
+                posicion=posicion,
+            )
         )
-        for p in partida.palabras
-    ]
     return EstadoPartidaResponse(
         codigo=partida.codigo,
         tipo=partida.tipo,
@@ -135,6 +162,43 @@ def generar_codigo(db: Session) -> str:
 
 # Endpoints existentes
 
+@router.get("/partidas", response_model=list[ResumenPartidaResponse])
+def listar_mis_partidas(
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """
+    Lista las partidas que el usuario logueado creó (participación con rol='creador'),
+    ordenadas de más reciente a más antigua. Útil para la pantalla 'Mis partidas'.
+    """
+    participaciones = (
+        db.query(Participacion)
+        .filter(
+            Participacion.usuario_id == usuario.id,
+            Participacion.rol == "creador",
+        )
+        .order_by(Participacion.unido_en.desc())
+        .all()
+    )
+
+    resultado = []
+    for participacion in participaciones:
+        partida = participacion.partida
+        palabras = partida.palabras
+        resultado.append(
+            ResumenPartidaResponse(
+                id=partida.id,
+                codigo=partida.codigo,
+                tipo=partida.tipo,
+                estado=partida.estado,
+                creado_en=partida.creado_en,
+                palabras_total=len(palabras),
+                palabras_encontradas=sum(1 for p in palabras if p.encontrada),
+            )
+        )
+    return resultado
+
+
 @router.post("/partidas", response_model=CrearPartidaResponse, status_code=201)
 def crear_partida(
     req: CrearPartidaRequest,
@@ -159,7 +223,7 @@ def crear_partida(
         palabra = Palabra(
             id=uuid.uuid4(),
             partida_id=partida.id,
-            palabra=p.palabra.upper(),
+            palabra=_normalizar_palabra(p.palabra),
             explicacion=p.explicacion,
         )
         db.add(palabra)
@@ -240,7 +304,7 @@ def agregar_palabras(
         palabra = Palabra(
             id=uuid.uuid4(),
             partida_id=partida.id,
-            palabra=p.palabra.upper(),
+            palabra=_normalizar_palabra(p.palabra),
             explicacion=p.explicacion,
         )
         db.add(palabra)
@@ -369,16 +433,35 @@ def editar_letra(
     db.commit()
     db.refresh(partida)
 
-    return _estado_response(partida)
+    return _estado_response(db, partida)
 
 
 # Endpoints de juego (abiertos a invitados)
 
 @router.get("/partidas/{codigo}/estado", response_model=EstadoPartidaResponse)
-def obtener_estado(codigo: str, db: Session = Depends(get_db)):
-    """Devuelve la grilla actual y el estado de cada palabra (sin revelar posiciones no encontradas)."""
+def obtener_estado(
+    codigo: str,
+    db: Session = Depends(get_db),
+    usuario: Optional[Usuario] = Depends(get_usuario_opcional),
+):
+    """Devuelve la grilla actual y el estado de cada palabra PARA EL JUGADOR
+    que consulta. Cada jugador ve su propio progreso (las palabras que encontró),
+    no el global. Los invitados ven todo vacío (su progreso va por localStorage).
+    No se revelan posiciones de palabras que este jugador no encontró."""
     partida = _get_partida_o_404(db, codigo)
-    return _estado_response(partida)
+
+    participacion = None
+    if usuario is not None:
+        participacion = (
+            db.query(Participacion)
+            .filter(
+                Participacion.partida_id == partida.id,
+                Participacion.usuario_id == usuario.id,
+            )
+            .first()
+        )
+
+    return _estado_response(db, partida, participacion)
 
 
 @router.post("/partidas/{codigo}/unirse", response_model=UnirseResponse)
@@ -394,10 +477,20 @@ def unirse_partida(
     """
     partida = _get_partida_o_404(db, codigo)
 
+    # Solo se puede "unirse" (empezar a jugar / arrancar el cronómetro) a una
+    # partida que ya fue publicada (estado 'activo'). Si la partida sigue en
+    # 'creando' no hay sopa generada ni nada que jugar.
+    if partida.estado != "activo":
+        raise HTTPException(
+            status_code=400,
+            detail="La partida todavía no está activa",
+        )
+
     if usuario is None:
         return UnirseResponse(modo="invitado")
 
-    participacion = _get_o_crear_participacion(db, partida, usuario, rol="jugador")
+    rol = "creador" if _es_creador(partida, usuario) else "jugador"
+    participacion = _get_o_crear_participacion(db, partida, usuario, rol=rol)
     if participacion.iniciado_en is None:
         participacion.iniciado_en = datetime.now(timezone.utc)
     db.commit()
@@ -416,17 +509,20 @@ def marcar_encontrada(
 ):
     """
     Valida la selección del jugador (celda inicial y final) contra la posición real
-    de la palabra y, si coincide (en cualquiera de los dos sentidos), la marca como
-    encontrada. Si hay un usuario logueado, se le atribuye el hallazgo y se actualiza
-    su puntaje; si es invitado, se marca igual pero sin atribución ni puntaje.
+    de la palabra y, si coincide (en cualquiera de los dos sentidos), la registra
+    como encontrada PARA ESA PARTICIPACIÓN.
+
+    - Jugador logueado: se le crea su participación (si no existe) y se registra un
+      hallazgo propio, avanzando SÓLO en su progreso. El creador juega igual pero su
+      participación no puntúa (lo filtra el ranking).
+    - Invitado: se valida la jugada y se devuelve encontrada=True, pero NO se persiste
+      nada (no hay usuario que asociar) -- el front guarda su progreso en localStorage.
     """
     partida = _get_partida_o_404(db, codigo)
     palabra = _get_palabra_o_404(db, partida, palabra_id)
 
     if partida.estado != "activo":
         raise HTTPException(status_code=400, detail="La partida todavía no está activa")
-    if palabra.encontrada:
-        return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
     if not palabra.posicion:
         raise HTTPException(status_code=400, detail="La palabra no tiene posición asignada")
 
@@ -453,14 +549,34 @@ def marcar_encontrada(
     if not (seleccion_directa or seleccion_invertida):
         raise HTTPException(status_code=400, detail="Selección incorrecta")
 
+    # Invitado: validamos y devolvemos, pero no persistimos nada.
+    if usuario is None:
+        return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
+
+    # Jugador logueado: progreso PROPIO por participación (incluido el creador,
+    # que juega pero no puntúa en el ranking).
     ahora = datetime.now(timezone.utc)
-    palabra.encontrada = True
-    palabra.encontrada_en = ahora
+    rol = "creador" if _es_creador(partida, usuario) else "jugador"
+    participacion = _get_o_crear_participacion(db, partida, usuario, rol=rol)
 
-    if usuario is not None:
-        palabra.encontrada_por = usuario.id
-
-        participacion = _get_o_crear_participacion(db, partida, usuario, rol="jugador")
+    ya_encontrada = (
+        db.query(Hallazgo)
+        .filter(
+            Hallazgo.participacion_id == participacion.id,
+            Hallazgo.palabra_id == palabra.id,
+        )
+        .first()
+    )
+    if ya_encontrada is None:
+        db.add(
+            Hallazgo(
+                id=uuid.uuid4(),
+                participacion_id=participacion.id,
+                palabra_id=palabra.id,
+                posicion=palabra.posicion,
+                encontrado_en=ahora,
+            )
+        )
         participacion.palabras_encontradas += 1
 
         total_palabras = len(partida.palabras)
@@ -475,11 +591,15 @@ def marcar_encontrada(
 
 @router.get("/partidas/{codigo}/ranking", response_model=list[RankingEntry])
 def obtener_ranking(codigo: str, db: Session = Depends(get_db)):
-    """Tabla de puntajes de la partida, ordenada de mayor a menor. Solo incluye jugadores registrados."""
+    """Tabla de puntajes de la partida, ordenada de mayor a menor. Solo incluye jugadores registrados
+    (excluye al creador: no suma puntos al jugar su propia partida)."""
     partida = _get_partida_o_404(db, codigo)
 
     entradas = []
     for participacion in partida.participaciones:
+        if participacion.usuario_id == partida.creador_id:
+            continue  # El creador no compite en su propia partida
+
         tiempo_segundos = None
         if participacion.iniciado_en and participacion.finalizado_en:
             delta = participacion.finalizado_en - participacion.iniciado_en
@@ -497,3 +617,74 @@ def obtener_ranking(codigo: str, db: Session = Depends(get_db)):
 
     entradas.sort(key=lambda e: e.puntaje, reverse=True)
     return entradas
+
+
+@router.delete("/partidas/{codigo}", status_code=204)
+def eliminar_partida(
+    codigo: str,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Elimina una partida permanentemente. Solo el creador puede hacerlo."""
+    partida = _get_partida_o_404(db, codigo)
+    _requerir_creador(partida, usuario)
+
+    db.delete(partida)
+    db.commit()
+
+
+def _normalizar_palabra(texto: str) -> str:
+    """Quita espacios internos y pasa a mayúsculas. El espacio que separa
+    palabras escritas (ej. 'sr frio') no debe entrar a la sopa; ahí va 'SRFRIO'."""
+    return "".join(texto.split()).upper()
+
+
+def _requerir_estado_creando(partida: Partida) -> None:
+    if partida.estado != "creando":
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se pueden modificar palabras mientras la partida está en estado 'creando'",
+        )
+
+
+@router.put(
+    "/partidas/{codigo}/palabras/{palabra_id}",
+    response_model=PalabraResponse,
+)
+def editar_palabra(
+    codigo: str,
+    palabra_id: uuid.UUID,
+    req: PalabraCreate,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Cambia el texto (y/o explicación) de una palabra. Solo el creador, y solo
+    mientras la partida está en 'creando' (una vez finalizada, la grilla ya se generó
+    con esas palabras y no se pueden tocar)."""
+    partida = _get_partida_o_404(db, codigo)
+    _requerir_creador(partida, usuario)
+    _requerir_estado_creando(partida)
+    palabra = _get_palabra_o_404(db, partida, palabra_id)
+
+    palabra.palabra = _normalizar_palabra(req.palabra)
+    palabra.explicacion = req.explicacion
+    db.commit()
+    db.refresh(palabra)
+    return palabra
+
+
+@router.delete("/partidas/{codigo}/palabras/{palabra_id}", status_code=204)
+def eliminar_palabra(
+    codigo: str,
+    palabra_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Elimina una palabra de la partida. Solo el creador, y solo en 'creando'."""
+    partida = _get_partida_o_404(db, codigo)
+    _requerir_creador(partida, usuario)
+    _requerir_estado_creando(partida)
+    palabra = _get_palabra_o_404(db, partida, palabra_id)
+
+    db.delete(palabra)
+    db.commit()
