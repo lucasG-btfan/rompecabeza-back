@@ -21,6 +21,7 @@ from app.schemas.partida import (
     AgregarPalabrasRequest,
     PosicionUpdate,
     EdicionRequest,
+    FinalizarRequest,
     FinalizarResponse,
     EstadoPalabraResponse,
     EstadoPartidaResponse,
@@ -33,11 +34,16 @@ from app.schemas.partida import (
     ResumenPartidaResponse,
 )
 from app.schemas.usuario import RankingEntry, UnirseResponse
+from app.services.texto import limpiar_para_grilla, texto_a_mostrar
 from app.services.sopa_generator import (
     generar_sopa,
     calcular_celda_final,
     SopaGeneratorError,
     DIRECCIONES,
+)
+from app.services.crucigrama_generator import (
+    generar_crucigrama,
+    CrucigramaGeneratorError,
 )
 
 router = APIRouter(tags=["partidas"])
@@ -75,6 +81,35 @@ def _requerir_creador(partida: Partida, usuario: Usuario) -> None:
         )
 
 
+def _validar_y_normalizar(
+    db: Session,
+    partida: Partida,
+    texto: str,
+    excluir_id: Optional[uuid.UUID] = None,
+) -> tuple[str, str]:
+    """Limpia el texto para la grilla, arma la versión presentable y rechaza
+    duplicados (misma versión limpia dentro de la misma partida)."""
+    limpia = limpiar_para_grilla(texto)
+    if not limpia:
+        raise HTTPException(
+            status_code=422,
+            detail="La palabra debe contener al menos una letra",
+        )
+    q = db.query(Palabra).filter(
+        Palabra.partida_id == partida.id,
+        Palabra.palabra == limpia,
+    )
+    if excluir_id is not None:
+        q = q.filter(Palabra.id != excluir_id)
+    duplicada = q.first()
+    if duplicada:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ya existe '{duplicada.texto_mostrar or duplicada.palabra}' en esta partida",
+        )
+    return limpia, texto_a_mostrar(texto)
+
+
 def _hallazgos_ids(participacion: Optional[Participacion]) -> set[uuid.UUID]:
     """IDs de palabras que una participación encontró. Si no hay participación
     (invitado), devuelve vacío: el invitado no tiene progreso persistido."""
@@ -100,6 +135,7 @@ def _estado_response(
             EstadoPalabraResponse(
                 id=p.id,
                 palabra=p.palabra,
+                texto_mostrar=p.texto_mostrar,
                 encontrada=p.id in encontradas,
                 posicion=posicion,
             )
@@ -220,10 +256,12 @@ def crear_partida(
     db.flush()  
 
     for p in req.palabras:
+        limpia, mostrar = _validar_y_normalizar(db, partida, p.palabra)
         palabra = Palabra(
             id=uuid.uuid4(),
             partida_id=partida.id,
-            palabra=_normalizar_palabra(p.palabra),
+            palabra=limpia,
+            texto_mostrar=mostrar,
             explicacion=p.explicacion,
         )
         db.add(palabra)
@@ -262,6 +300,7 @@ def obtener_partida(codigo: str, db: Session = Depends(get_db)):
         PalabraPublicaResponse(
             id=p.id,
             palabra=p.palabra,
+            texto_mostrar=p.texto_mostrar,
             explicacion=p.explicacion,
             posicion=p.posicion if p.encontrada else None,
             encontrada=p.encontrada,
@@ -301,10 +340,12 @@ def agregar_palabras(
 
     nuevas = []
     for p in req.palabras:
+        limpia, mostrar = _validar_y_normalizar(db, partida, p.palabra)
         palabra = Palabra(
             id=uuid.uuid4(),
             partida_id=partida.id,
-            palabra=_normalizar_palabra(p.palabra),
+            palabra=limpia,
+            texto_mostrar=mostrar,
             explicacion=p.explicacion,
         )
         db.add(palabra)
@@ -348,47 +389,103 @@ def posicionar_palabra(
 @router.post("/partidas/{codigo}/finalizar", response_model=FinalizarResponse)
 def finalizar_partida(
     codigo: str,
+    req: Optional[FinalizarRequest] = None,
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Genera automáticamente la sopa de letras y pasa la partida a estado 'activo'. Solo el creador."""
+    """Genera automáticamente la sopa de letras o el crucigrama y pasa la
+    partida a estado 'activo'. Solo el creador."""
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
 
-    if partida.tipo != "sopa":
-        raise HTTPException(
-            status_code=400,
-            detail="Este endpoint solo genera Sopa de Letras. Para crucigrama todavía no está implementado.",
-        )
     if partida.estado != "creando":
         raise HTTPException(status_code=400, detail="La partida ya fue finalizada")
     if not partida.palabras:
         raise HTTPException(status_code=400, detail="La partida no tiene palabras cargadas")
 
-    palabras_texto = [p.palabra for p in partida.palabras]
-    config = partida.config or {}
-    filas = config.get("filas")
-    columnas = config.get("columnas")
+    if partida.tipo == "sopa":
+        palabras_texto = [p.palabra for p in partida.palabras]
+        config = partida.config or {}
+        filas = config.get("filas")
+        columnas = config.get("columnas")
 
-    try:
-        grid, posiciones = generar_sopa(palabras_texto, filas=filas, columnas=columnas)
-    except SopaGeneratorError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        try:
+            grid, posiciones = generar_sopa(palabras_texto, filas=filas, columnas=columnas)
+        except SopaGeneratorError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    for p in partida.palabras:
-        p.posicion = posiciones[p.palabra]
+        for p in partida.palabras:
+            p.posicion = posiciones[p.palabra]
 
-    partida.grilla = grid
-    partida.estado = "activo"
+        partida.grilla = grid
+        partida.estado = "activo"
 
-    db.commit()
-    db.refresh(partida)
+        db.commit()
+        db.refresh(partida)
 
-    return FinalizarResponse(
-        codigo=partida.codigo,
-        estado=partida.estado,
-        filas=len(grid),
-        columnas=len(grid[0]),
+        return FinalizarResponse(
+            codigo=partida.codigo,
+            estado=partida.estado,
+            filas=len(grid),
+            columnas=len(grid[0]),
+        )
+
+    if partida.tipo == "crucigrama":
+        if len(partida.palabras) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Un crucigrama requiere al menos dos palabras que compartan letras",
+            )
+
+        faltan_pistas = [
+            p.texto_mostrar or p.palabra
+            for p in partida.palabras
+            if not (p.explicacion and p.explicacion.strip())
+        ]
+        if faltan_pistas:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Las palabras deben tener una pista (explicación) para generar un crucigrama. "
+                    f"Faltan: {', '.join(faltan_pistas)}"
+                ),
+            )
+
+        palabras_texto = [p.palabra for p in partida.palabras]
+        try:
+            grilla_data, posiciones = generar_crucigrama(palabras_texto)
+        except CrucigramaGeneratorError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        for p in partida.palabras:
+            p.posicion = posiciones[p.palabra]
+
+        partida.grilla = grilla_data
+        partida.estado = "activo"
+
+        filas = max(
+            pos["fila"] + (len(palabra) if pos["orientacion"] == "V" else 1)
+            for palabra, pos in posiciones.items()
+        )
+        columnas = max(
+            pos["columna"] + (len(palabra) if pos["orientacion"] == "H" else 1)
+            for palabra, pos in posiciones.items()
+        )
+
+        db.commit()
+        db.refresh(partida)
+
+        return FinalizarResponse(
+            codigo=partida.codigo,
+            estado=partida.estado,
+            filas=filas,
+            columnas=columnas,
+            grilla=grilla_data,
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Tipo de partida no soportado: {partida.tipo}",
     )
 
 
@@ -407,6 +504,12 @@ def editar_letra(
     """
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
+
+    if partida.tipo == "crucigrama":
+        raise HTTPException(
+            status_code=400,
+            detail="La edición de celdas solo está disponible para sopa de letras",
+        )
 
     if not partida.grilla:
         raise HTTPException(
@@ -633,12 +736,6 @@ def eliminar_partida(
     db.commit()
 
 
-def _normalizar_palabra(texto: str) -> str:
-    """Quita espacios internos y pasa a mayúsculas. El espacio que separa
-    palabras escritas (ej. 'sr frio') no debe entrar a la sopa; ahí va 'SRFRIO'."""
-    return "".join(texto.split()).upper()
-
-
 def _requerir_estado_creando(partida: Partida) -> None:
     if partida.estado != "creando":
         raise HTTPException(
@@ -666,7 +763,9 @@ def editar_palabra(
     _requerir_estado_creando(partida)
     palabra = _get_palabra_o_404(db, partida, palabra_id)
 
-    palabra.palabra = _normalizar_palabra(req.palabra)
+    limpia, mostrar = _validar_y_normalizar(db, partida, req.palabra, excluir_id=palabra.id)
+    palabra.palabra = limpia
+    palabra.texto_mostrar = mostrar
     palabra.explicacion = req.explicacion
     db.commit()
     db.refresh(palabra)

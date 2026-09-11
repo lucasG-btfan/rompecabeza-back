@@ -1,7 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Literal
 
 
 class PalabraCreate(BaseModel):
@@ -12,6 +12,7 @@ class PalabraCreate(BaseModel):
 class PalabraResponse(BaseModel):
     id: UUID
     palabra: str
+    texto_mostrar: Optional[str] = None
     explicacion: Optional[str]
     posicion: Optional[dict]
     encontrada: bool
@@ -50,6 +51,7 @@ class PalabraPublicaResponse(BaseModel):
     """Igual a PalabraResponse pero SIN filtrar la posicion de palabras no encontradas."""
     id: UUID
     palabra: str
+    texto_mostrar: Optional[str] = None
     explicacion: Optional[str]
     posicion: Optional[dict]  # Se fuerza a None si encontrada=False (ver route)
     encontrada: bool
@@ -74,6 +76,44 @@ class PartidaPublicaResponse(BaseModel):
 # Nuevos schemas - Sopa de Letras
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Nuevos schemas - Crucigrama
+# Se definen ANTES de FinalizarResponse/EstadoPartidaResponse porque esos
+# schemas los referencian en sus campos (`grilla`).
+# --------------------------------------------------------------------------
+
+class FinalizarRequest(BaseModel):
+    """Body del POST /finalizar. El front actual lo llama sin body; se declara
+    con `extra='forbid'` para que un campo no declarado falle con 422."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GrillaCeldaCrucigrama(BaseModel):
+    letra: Optional[str] = None
+    numero: Optional[int] = None
+    tipo: Literal["letra", "negra"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PalabraGrillaCrucigrama(BaseModel):
+    numero: int
+    orientacion: Literal["H", "V"]
+    posicion: dict
+    longitud: int
+    texto: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GrillaCrucigrama(BaseModel):
+    celdas: list[GrillaCeldaCrucigrama]
+    palabras: list[PalabraGrillaCrucigrama]
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AgregarPalabrasRequest(BaseModel):
     palabras: list[PalabraCreate] = Field(..., min_length=1)
 
@@ -95,11 +135,13 @@ class FinalizarResponse(BaseModel):
     estado: str
     filas: int
     columnas: int
+    grilla: Optional[GrillaCrucigrama] = None
 
 
 class EstadoPalabraResponse(BaseModel):
     id: UUID
     palabra: str
+    texto_mostrar: Optional[str] = None
     encontrada: bool
     posicion: Optional[dict] = None  # Solo se revela si encontrada=True
 
@@ -108,7 +150,7 @@ class EstadoPartidaResponse(BaseModel):
     codigo: str
     tipo: str
     estado: str
-    grilla: Optional[list[list[str]]] = None
+    grilla: Optional[list[list[str]] | GrillaCrucigrama] = None
     palabras: list[EstadoPalabraResponse]
 
 
