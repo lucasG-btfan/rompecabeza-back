@@ -181,6 +181,30 @@ def _generar_candidatos(palabra: str, colocadas: list[dict]) -> list[tuple]:
     return list(candidatos)
 
 
+def _palabras_aisladas(palabras: list[str]) -> list[str]:
+    """Palabras que no comparten NINGUNA letra con el resto (grafo de
+    compatibilidad desconectado): es imposible que crucen en un crucigrama.
+
+    Retorna las aisladas en el orden de entrada. Un crucigrama válido
+    requiere un grafo conexo (TODA palabra comparte al menos una letra con
+    alguna otra), así que basta con reportar las aisladas — si las hay, el
+    generador no tiene solución (C-11, defecto QA 6.7: mensaje honesto).
+    """
+    palabras_por_letra: dict[str, list[str]] = {}
+    for palabra in palabras:
+        for letra in set(palabra):
+            palabras_por_letra.setdefault(letra, []).append(palabra)
+
+    aisladas: list[str] = []
+    for palabra in palabras:
+        compartidas = set()
+        for letra in set(palabra):
+            compartidas.update(palabras_por_letra[letra])
+        if not compartidas - {palabra}:
+            aisladas.append(palabra)
+    return aisladas
+
+
 def generar_crucigrama(
     palabras: list[str],
     seed: int | None = None,
@@ -212,7 +236,16 @@ def generar_crucigrama(
                 "Cada palabra debe tener al menos dos letras para poder cruzar"
             )
 
-    ordenadas = sorted(palabras_norm, key=len, reverse=True)
+    aisladas = _palabras_aisladas(palabras_norm)
+    if aisladas:
+        raise CrucigramaGeneratorError(
+            "Las palabras "
+            + ", ".join(aisladas)
+            + " no comparten ninguna letra con el resto. "
+            "Agregá palabras que compartan letras o usá el editor manual "
+            "para posicionarlas."
+        )
+
     rng = random.Random(seed)
     resolucion: list[dict] | None = None
 
@@ -220,6 +253,16 @@ def generar_crucigrama(
         provisionales: dict = {}
         colocadas: list[dict] = []
         exito = True
+
+        # C-11 (defecto QA 6.7): el ORDEN de colocación se baraja en CADA
+        # intento. Antes era un orden fijo (más larga primero) construido una
+        # vez fuera del loop y la resolubilidad dependía del orden en que el
+        # creador tipeaba las palabras (el set PERRO/GATO/AGUA/PAN/LUNA/CASA
+        # fallaba en 600 de 720 permutaciones). Con 500 intentos x órdenes
+        # barajados (mismo rng) el set del PO resuelve; el determinismo por
+        # seed se preserva (el rng consume la misma secuencia).
+        ordenadas = sorted(palabras_norm, key=len, reverse=True)
+        rng.shuffle(ordenadas)
 
         for palabra in ordenadas:
             if not colocadas:
@@ -261,13 +304,37 @@ def generar_crucigrama(
             break
 
     if resolucion is None:
+        # C-11 (defecto QA 6.7): mensaje honesto — el grafo es conexo (ya se
+        # validó arriba) pero el greedy aleatorizado agotó los intentos; el
+        # backtracking completo queda como mejora futura (diagnóstico opción 2).
         raise CrucigramaGeneratorError(
-            "No se pudo generar un crucigrama válido con estas palabras. "
-            "Probá con palabras que compartan letras o con más palabras de 2+ letras."
+            f"No se pudo generar un crucigrama automático con estas palabras "
+            f"en {MAX_INTENTOS} intentos. "
+            "Probá con otras palabras, o posicionalas manualmente en el editor."
         )
 
+    return construir_grilla(resolucion)
+
+
+def construir_grilla(colocadas: list[dict]) -> tuple[dict, dict]:
+    """Construye la grilla final (contrato D6) desde un layout disperso.
+
+    Recibe las palabras colocadas (`{"palabra", "posicion", "orientacion"}`)
+    en coordenadas absolutas (pueden ser negativas), calcula el bounding box
+    mínimo, traslada todo a (0, 0), rellena las celdas vacías con negras y
+    numera las pistas 1..N en barrido fila-major.
+
+    Retorna:
+      - grilla: `{"celdas": [...], "palabras": [...]}` (contrato D6)
+      - posiciones: `{palabra_limpia: {"fila", "columna", "orientacion", "numero"}}`
+
+    La comparten el generador (`generar_crucigrama`) y el editor manual
+    del crucigrama (C-09, `construir_layout`): un solo punto de la verdad
+    para el shape final de la grilla. Lanza `CrucigramaGeneratorError` si el
+    bounding box excede `GRILLA_MAXIMA`.
+    """
     todas_las_celdas = []
-    for w in resolucion:
+    for w in colocadas:
         todas_las_celdas.extend(cruzar(w["posicion"], w["palabra"], w["orientacion"]))
     min_fila = min(f for f, _, _ in todas_las_celdas)
     min_col = min(c for _, c, _ in todas_las_celdas)
@@ -281,7 +348,7 @@ def generar_crucigrama(
 
     provisionales_tras: dict = {}
     trasladas: list[dict] = []
-    for w in resolucion:
+    for w in colocadas:
         f0 = w["posicion"]["fila"] - min_fila
         c0 = w["posicion"]["columna"] - min_col
         for f, c, letra in cruzar(w["posicion"], w["palabra"], w["orientacion"]):

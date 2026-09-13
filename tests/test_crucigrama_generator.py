@@ -73,14 +73,20 @@ class TestConstantesYApi:
 
 
 class TestColocacionOrtogonal:
-    def test_palabra_mas_larga_en_horizontal_desde_origen(self):
-        grilla, posiciones = generar_crucigrama(["CASA", "SOL"], seed=1)
-        assert posiciones["CASA"] == {
-            "fila": 0,
-            "columna": 0,
-            "orientacion": "H",
-            "numero": 1,
+    def test_el_ancla_inicial_queda_en_el_origen(self):
+        # C-11 (defecto QA 6.7): el orden de colocación se baraja por intento,
+        # así que la "más larga primero" dejó de ser garantía. El invariante
+        # real se mantiene: el bounding box mínimo se normaliza a (0,0) y esa
+        # celda SIEMPRE pertenece a alguna palabra (el ancla del layout).
+        grilla, _ = generar_crucigrama(["CASA", "SOL"], seed=1)
+        celdas_ocupadas = {
+            (f, c)
+            for w in grilla["palabras"]
+            for f, c, _ in _celdas_de_palabra(
+                w["posicion"]["fila"], w["posicion"]["columna"], w["orientacion"], w["texto"]
+            )
         }
+        assert (0, 0) in celdas_ocupadas
 
     def test_todas_las_palabras_son_h_o_v(self):
         grilla, _ = generar_crucigrama(["AVION", "CASA", "LUNA", "SOL"], seed=1)
@@ -209,6 +215,32 @@ class TestErrores:
         with pytest.raises(CrucigramaGeneratorError):
             generar_crucigrama(["REY", "SOL"])
 
+    def test_error_palabra_aislada_mensaje_diferenciado(self):
+        # C-11 (defecto QA B): el grafo de compatibilidad es desconectado —
+        # PERRO (P,E,R,O) no comparte NINGUNA letra con LUNA (L,U,N,A) ni
+        # con CASA (C,A,S). Mensaje con los nombres + fallback manual.
+        with pytest.raises(CrucigramaGeneratorError) as exc:
+            generar_crucigrama(["LUNA", "PERRO", "CASA"])
+        texto = str(exc.value)
+        assert "PERRO" in texto
+        assert "no comparten ninguna letra con el resto" in texto
+        assert "editor manual" in texto
+
+    def test_error_intentos_agotados_mensaje_con_fallback_editor(self, monkeypatch):
+        # Mecanismo: el grafo es conexo (CASA↔SOL por S) pero los intentos se
+        # agotan → mensaje honesto con fallback al editor manual. Se fuerza
+        # con MAX_INTENTOS=0 (determinístico — el caso real "conexo sin
+        # solución en 500" no se puede garantizar por datos: depende del
+        # greedy; documentado en la task 6.7).
+        import app.services.crucigrama_generator as gen
+
+        monkeypatch.setattr(gen, "MAX_INTENTOS", 0)
+        with pytest.raises(CrucigramaGeneratorError) as exc:
+            generar_crucigrama(["CASA", "SOL"])
+        texto = str(exc.value)
+        assert "crucigrama automático" in texto
+        assert "manualmente en el editor" in texto
+
     def test_error_menos_de_dos_palabras(self):
         with pytest.raises(CrucigramaGeneratorError):
             generar_crucigrama(["CASA"])
@@ -254,3 +286,58 @@ class TestCeldasNegras:
                     assert celda["tipo"] == "negra"
                     assert celda["letra"] is None
                     assert celda["numero"] is None
+
+
+class TestRobustezOrdenEntrada:
+    """C-11/C-08 (defecto QA 6.7): el generador greedy usaba un ORDEN de
+    colocación fijo (más larga primero, estable) construido UNA vez fuera del
+    loop de intentos — la resolubilidad dependía de cómo el creador tipeaba
+    las palabras (600 de 720 permutaciones del set del PO fallaban). El orden
+    de ENTRADA no debe afectar la generación."""
+
+    SET_PO = ["PERRO", "GATO", "AGUA", "PAN", "LUNA", "CASA"]
+
+    def test_set_del_po_en_orden_adverso_genera(self):
+        # Orden reportado por el PO (LUNA antes que AGUA): fallaba SIEMPRE
+        # hoy — el sort estable lo mantenía y la solución conocida arranca
+        # con PERRO VERTICAL, inalcanzable con la primera en (0,0,"H").
+        grilla, _ = generar_crucigrama(
+            ["PERRO", "GATO", "LUNA", "AGUA", "CASA", "PAN"], seed=7
+        )
+        assert {w["texto"] for w in grilla["palabras"]} == set(self.SET_PO)
+
+    def test_permutaciones_distintas_todas_generan(self):
+        for orden in [
+            ["PERRO", "LUNA", "GATO", "PAN", "CASA", "AGUA"],
+            ["PAN", "CASA", "AGUA", "LUNA", "GATO", "PERRO"],
+            ["GATO", "AGUA", "PERRO", "CASA", "PAN", "LUNA"],
+        ]:
+            grilla, _ = generar_crucigrama(orden, seed=7)
+            assert {w["texto"] for w in grilla["palabras"]} == set(self.SET_PO), orden
+
+    def test_grilla_valida_triangulate(self):
+        # Validación estructural de la solución generada: las 6 palabras
+        # presentes, ortogonales, dentro de la grilla normalizada y cada una
+        # cruza ≥1 existente (anti-fantasma estructural, helpers del archivo).
+        grilla, _ = generar_crucigrama(self.SET_PO, seed=7)
+        assert {w["texto"] for w in grilla["palabras"]} == set(self.SET_PO)
+        assert all(w["orientacion"] in {"H", "V"} for w in grilla["palabras"])
+        assert all(
+            w["posicion"]["fila"] >= 0 and w["posicion"]["columna"] >= 0
+            for w in grilla["palabras"]
+        )
+        celdas_por_palabra = [
+            {
+                (f, c)
+                for f, c, _ in _celdas_de_palabra(
+                    w["posicion"]["fila"],
+                    w["posicion"]["columna"],
+                    w["orientacion"],
+                    w["texto"],
+                )
+            }
+            for w in grilla["palabras"]
+        ]
+        for i, celdas in enumerate(celdas_por_palabra):
+            resto = set().union(*(celdas_por_palabra[:i] + celdas_por_palabra[i + 1 :]))
+            assert celdas & resto, "toda palabra debe cruzar ≥1 existente (sin fantasma)"

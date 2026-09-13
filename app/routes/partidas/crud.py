@@ -1,0 +1,209 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+import uuid
+import random
+import string
+
+from app.database import get_db
+from app.auth import get_usuario_actual
+from app.models.usuario import Usuario
+from app.models.participacion import Participacion
+from app.models.partida import Partida
+from app.models.palabra import Palabra
+from app.schemas.partida import (
+    CrearPartidaRequest,
+    CrearPartidaResponse,
+    PartidaPublicaResponse,
+    AgregarPalabrasRequest,
+    PalabraPublicaResponse,
+    PalabraResponse,
+    PalabraCreate,
+    ResumenPartidaResponse,
+)
+from app.routes.partidas.deps import (
+    _get_partida_o_404,
+    _requerir_creador,
+    _validar_y_normalizar,
+)
+
+router = APIRouter(tags=["partidas"])
+
+
+def generar_codigo(db: Session) -> str:
+    """Genera un codigo unico de 6 caracteres."""
+    while True:
+        codigo = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        existing = db.query(Partida).filter(Partida.codigo == codigo).first()
+        if not existing:
+            return codigo
+
+
+@router.get("/partidas", response_model=list[ResumenPartidaResponse])
+def listar_mis_partidas(
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """
+    Lista las partidas que el usuario logueado creó (participación con rol='creador'),
+    ordenadas de más reciente a más antigua. Útil para la pantalla 'Mis partidas'.
+    """
+    participaciones = (
+        db.query(Participacion)
+        .filter(
+            Participacion.usuario_id == usuario.id,
+            Participacion.rol == "creador",
+        )
+        .order_by(Participacion.unido_en.desc())
+        .all()
+    )
+
+    resultado = []
+    for participacion in participaciones:
+        partida = participacion.partida
+        palabras = partida.palabras
+        resultado.append(
+            ResumenPartidaResponse(
+                id=partida.id,
+                codigo=partida.codigo,
+                tipo=partida.tipo,
+                estado=partida.estado,
+                creado_en=partida.creado_en,
+                palabras_total=len(palabras),
+                palabras_encontradas=sum(1 for p in palabras if p.encontrada),
+            )
+        )
+    return resultado
+
+
+@router.post("/partidas", response_model=CrearPartidaResponse, status_code=201)
+def crear_partida(
+    req: CrearPartidaRequest,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Crear una partida requiere estar logueado (necesitamos creador_id para ownership)."""
+    codigo = generar_codigo(db)
+
+    partida = Partida(
+        id=uuid.uuid4(),
+        codigo=codigo,
+        tipo=req.tipo,
+        config=req.config or {},
+        estado="creando",
+        creador_id=usuario.id,
+    )
+    db.add(partida)
+    db.flush()  
+
+    for p in req.palabras:
+        limpia, mostrar = _validar_y_normalizar(db, partida, p.palabra)
+        palabra = Palabra(
+            id=uuid.uuid4(),
+            partida_id=partida.id,
+            palabra=limpia,
+            texto_mostrar=mostrar,
+            explicacion=p.explicacion,
+        )
+        db.add(palabra)
+
+    # El creador también queda como participación (rol='creador'), útil si
+    # después quiere jugar su propia partida o si querés listar "mis partidas".
+    participacion = Participacion(
+        id=uuid.uuid4(),
+        partida_id=partida.id,
+        usuario_id=usuario.id,
+        rol="creador",
+    )
+    db.add(participacion)
+
+    db.commit()
+    db.refresh(partida)
+
+    return CrearPartidaResponse(
+        id=partida.id,
+        codigo=partida.codigo,
+        tipo=partida.tipo,
+        estado=partida.estado,
+    )
+
+
+@router.get("/partidas/{codigo}", response_model=PartidaPublicaResponse)
+def obtener_partida(codigo: str, db: Session = Depends(get_db)):
+    """
+    Vista pública de la partida. NO expone `posicion` de palabras todavía no
+    encontradas (ver hallazgo de seguridad: antes este endpoint sí las filtraba).
+    Accesible sin login: cualquiera con el código puede ver/jugar (soporta invitados).
+    """
+    partida = _get_partida_o_404(db, codigo)
+
+    palabras = [
+        PalabraPublicaResponse(
+            id=p.id,
+            palabra=p.palabra,
+            texto_mostrar=p.texto_mostrar,
+            explicacion=p.explicacion,
+            posicion=p.posicion if p.encontrada else None,
+            encontrada=p.encontrada,
+        )
+        for p in partida.palabras
+    ]
+
+    return PartidaPublicaResponse(
+        id=partida.id,
+        codigo=partida.codigo,
+        tipo=partida.tipo,
+        estado=partida.estado,
+        palabras=palabras,
+        config=partida.config,
+        creado_en=partida.creado_en,
+    )
+
+
+@router.post("/partidas/{codigo}/palabras", response_model=list[PalabraResponse], status_code=201)
+def agregar_palabras(
+    codigo: str,
+    req: AgregarPalabrasRequest,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Agrega más palabras a una partida que todavía está en estado 'creando'. Solo el creador."""
+    partida = _get_partida_o_404(db, codigo)
+    _requerir_creador(partida, usuario)
+
+    if partida.estado != "creando":
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se pueden agregar palabras mientras la partida está en estado 'creando'",
+        )
+
+    nuevas = []
+    for p in req.palabras:
+        limpia, mostrar = _validar_y_normalizar(db, partida, p.palabra)
+        palabra = Palabra(
+            id=uuid.uuid4(),
+            partida_id=partida.id,
+            palabra=limpia,
+            texto_mostrar=mostrar,
+            explicacion=p.explicacion,
+        )
+        db.add(palabra)
+        nuevas.append(palabra)
+
+    db.commit()
+    for p in nuevas:
+        db.refresh(p)
+    return nuevas
+
+
+@router.delete("/partidas/{codigo}", status_code=204)
+def eliminar_partida(
+    codigo: str,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Elimina una partida permanentemente. Solo el creador puede hacerlo."""
+    partida = _get_partida_o_404(db, codigo)
+    _requerir_creador(partida, usuario)
+
+    db.delete(partida)
+    db.commit()

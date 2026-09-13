@@ -103,7 +103,9 @@ def test_crucigrama_400_sin_cruces_posibles(client):
 
     res = _finalizar(client, codigo)
     assert res.status_code == 400, res.text
-    assert "No se pudo generar un crucigrama" in res.json()["detail"]
+    # C-11 (defecto QA 6.7): REY y SOL no comparten ninguna letra → el
+    # mensaje diferenciado de palabras aisladas reemplazó al genérico.
+    assert "REY, SOL no comparten ninguna letra con el resto" in res.json()["detail"]
 
 
 def test_crucigrama_422_campo_no_declarado(client):

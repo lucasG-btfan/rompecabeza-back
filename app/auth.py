@@ -62,7 +62,7 @@ def setear_cookie_sesion(response: Response, usuario_id: uuid.UUID) -> None:
         max_age=COOKIE_MAX_AGE,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
     )
 
 

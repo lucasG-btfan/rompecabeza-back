@@ -21,6 +21,22 @@ class PalabraResponse(BaseModel):
         from_attributes = True
 
 
+class EditorPartidaResponse(BaseModel):
+    """Estado del editor manual del crucigrama (C-09), SOLO para el creador.
+
+    A diferencia de `PartidaPublicaResponse`, aquí la `posicion` es SIEMPRE
+    visible: el creador está armando el layout y necesita ver dónde quedó
+    cada palabra (null si todavía no la posicionó).
+    """
+
+    codigo: str
+    tipo: str
+    estado: str
+    palabras: list[PalabraResponse]
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class CrearPartidaRequest(BaseModel):
     tipo: str = Field(..., pattern="^(sopa|crucigrama)$")
     palabras: list[PalabraCreate] = Field(..., min_length=1)
@@ -102,7 +118,9 @@ class PalabraGrillaCrucigrama(BaseModel):
     orientacion: Literal["H", "V"]
     posicion: dict
     longitud: int
-    texto: str
+    # C-10 (D2): en el GET /estado este texto va null (anti-cheat). En la
+    # respuesta del POST /finalizar sigue siendo la solución visible.
+    texto: Optional[str] = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -119,9 +137,16 @@ class AgregarPalabrasRequest(BaseModel):
 
 
 class PosicionUpdate(BaseModel):
-    fila: int = Field(..., ge=0)
-    columna: int = Field(..., ge=0)
-    orientacion: str  # "E","O","N","S","SE","SO","NE","NO"
+    # REVISIÓN 9.x (D1): fila/columna pierden `ge=0` — el editor manual de
+    # crucigrama necesita coordenadas negativas para extender palabras hacia
+    # arriba/izquierda del bbox actual (bug ARENA/ESPEJO). La rama `sopa` de
+    # la ruta agrega una validación explícita de no negatividad (400 amigable)
+    # para preservar su comportamiento previo; la rama crucigrama las acepta.
+    fila: int
+    columna: int
+    orientacion: str  # sopa: "E","O","N","S","SE","SO","NE","NO"; crucigrama: "H","V"
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class EdicionRequest(BaseModel):
@@ -140,8 +165,14 @@ class FinalizarResponse(BaseModel):
 
 class EstadoPalabraResponse(BaseModel):
     id: UUID
-    palabra: str
+    # C-10 (D2): la solución va null en crucigrama (anti-cheat); en sopa sigue
+    # exponiéndose (el jugador necesita ver la palabra que busca).
+    palabra: Optional[str] = None
     texto_mostrar: Optional[str] = None
+    # C-10 (D3): numero de pista del crucigrama, visible SIEMPRE (el panel de
+    # pistas lo necesita) aunque la palabra no esté encontrada. Null defensivo
+    # si la posicion almacenada no trajo numero. En sopa queda None.
+    numero: Optional[int] = None
     encontrada: bool
     posicion: Optional[dict] = None  # Solo se revela si encontrada=True
 
@@ -159,6 +190,19 @@ class EncontradaRequest(BaseModel):
     columna_inicio: int = Field(..., ge=0)
     fila_fin: int = Field(..., ge=0)
     columna_fin: int = Field(..., ge=0)
+
+
+class RespuestaRequest(BaseModel):
+    """Body del PUT /palabras/{id}/respuesta de crucigrama (C-10, D1).
+
+    `letras` = letras que el jugador tipeó en la palabra del tablero. Se
+    normalizan server-side con `limpiar_para_grilla` antes de comparar.
+    `extra='forbid'` (regla dura): campo no declarado → 422.
+    """
+
+    letras: str
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class EncontradaResponse(BaseModel):

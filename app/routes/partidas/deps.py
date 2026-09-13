@@ -1,0 +1,205 @@
+from datetime import datetime, timezone
+from typing import Optional
+import uuid
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.models.partida import Partida
+from app.models.palabra import Palabra
+from app.models.usuario import Usuario
+from app.models.participacion import Participacion
+from app.schemas.partida import (
+    EstadoPalabraResponse,
+    EstadoPartidaResponse,
+)
+from app.services.texto import limpiar_para_grilla, texto_a_mostrar
+from app.services.crucigrama_generator import DELTAS
+
+
+def _get_partida_o_404(db: Session, codigo: str) -> Partida:
+    partida = db.query(Partida).filter(Partida.codigo == codigo).first()
+    if not partida:
+        raise HTTPException(status_code=404, detail="Partida no encontrada")
+    return partida
+
+
+def _get_palabra_o_404(db: Session, partida: Partida, palabra_id: uuid.UUID) -> Palabra:
+    palabra = (
+        db.query(Palabra)
+        .filter(Palabra.id == palabra_id, Palabra.partida_id == partida.id)
+        .first()
+    )
+    if not palabra:
+        raise HTTPException(status_code=404, detail="Palabra no encontrada en esta partida")
+    return palabra
+
+
+def _es_creador(partida: Partida, usuario: Usuario) -> bool:
+    """Devuelve True si el usuario es el creador de la partida."""
+    return partida.creador_id == usuario.id
+
+
+def _requerir_creador(partida: Partida, usuario: Usuario) -> None:
+    if partida.creador_id != usuario.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el usuario que creó la partida puede hacer esto",
+        )
+
+
+def _validar_y_normalizar(
+    db: Session,
+    partida: Partida,
+    texto: str,
+    excluir_id: Optional[uuid.UUID] = None,
+) -> tuple[str, str]:
+    """Limpia el texto para la grilla, arma la versión presentable y rechaza
+    duplicados (misma versión limpia dentro de la misma partida)."""
+    limpia = limpiar_para_grilla(texto)
+    if not limpia:
+        raise HTTPException(
+            status_code=422,
+            detail="La palabra debe contener al menos una letra",
+        )
+    q = db.query(Palabra).filter(
+        Palabra.partida_id == partida.id,
+        Palabra.palabra == limpia,
+    )
+    if excluir_id is not None:
+        q = q.filter(Palabra.id != excluir_id)
+    duplicada = q.first()
+    if duplicada:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ya existe '{duplicada.texto_mostrar or duplicada.palabra}' en esta partida",
+        )
+    return limpia, texto_a_mostrar(texto)
+
+
+def _hallazgos_ids(participacion: Optional[Participacion]) -> set[uuid.UUID]:
+    """IDs de palabras que una participación encontró. Si no hay participación
+    (invitado), devuelve vacío: el invitado no tiene progreso persistido."""
+    if participacion is None:
+        return set()
+    return {h.palabra_id for h in participacion.hallazgos}
+
+
+def _sanitizar_grilla_crucigrama(
+    grilla: dict,
+    posiciones_por_palabra: dict[uuid.UUID, dict],
+) -> dict:
+    """Copia la grilla del crucigrama ocultando TODAS las letras que no
+    pertenecen a palabras encontradas por ESTA participación (anti-cheat C-10).
+
+    Se conserva la geometría completa del puzzle: celdas negras, numeros de
+    pista, tipos y hasta las celdas de letra (con su letra en null). El
+    panel de pistas y el tablero siguen siendo legibles sin la solución.
+    `texto` de cada palabra de la grilla va null por la misma razón.
+
+    Las palabras encontradas se matchean contra las de la grilla por su
+    posición de inicio (fila, columna, orientacion) — la posición de un
+    hallazgo es una copia de la de la palabra, con el mismo numero de pista.
+    """
+    encontradas_por_inicio = {
+        (pos["fila"], pos["columna"], pos["orientacion"]): pos.get("numero")
+        for pos in posiciones_por_palabra.values()
+        if pos
+    }
+
+    palabras_grilla = grilla["palabras"]
+    filas = max(
+        w["posicion"]["fila"] + (w["longitud"] if w["orientacion"] == "V" else 1)
+        for w in palabras_grilla
+    )
+    columnas = max(
+        w["posicion"]["columna"] + (w["longitud"] if w["orientacion"] == "H" else 1)
+        for w in palabras_grilla
+    )
+
+    reveladas: set[int] = set()
+    for w in palabras_grilla:
+        clave = (w["posicion"]["fila"], w["posicion"]["columna"], w["orientacion"])
+        if clave not in encontradas_por_inicio:
+            continue
+        dr, dc = DELTAS[w["orientacion"]]
+        for i in range(w["longitud"]):
+            f = w["posicion"]["fila"] + dr * i
+            c = w["posicion"]["columna"] + dc * i
+            reveladas.add(f * columnas + c)
+
+    celdas = [
+        {**celda, "letra": celda["letra"] if indice in reveladas else None}
+        for indice, celda in enumerate(grilla["celdas"])
+    ]
+    palabras = [dict(w, texto=None) for w in palabras_grilla]
+
+    return {"celdas": celdas, "palabras": palabras}
+
+
+def _estado_response(
+    db: Session, partida: Partida, participacion: Optional[Participacion] = None
+) -> EstadoPartidaResponse:
+    """guarda las palabras encontradas, para invitados no se guarda el resultado de las partidas"""
+    encontradas = _hallazgos_ids(participacion)
+    posiciones_por_palabra: dict[uuid.UUID, dict] = {}
+    if participacion is not None:
+        for h in participacion.hallazgos:
+            posiciones_por_palabra[h.palabra_id] = h.posicion
+
+    es_crucigrama = partida.tipo == "crucigrama"
+    palabras_estado = []
+    for p in partida.palabras:
+        posicion = p.posicion if p.id in encontradas else None
+        # C-10 (D2): en crucigrama la solución no se expone en el estado de la
+        # palabra; el numero de pista sí (lo necesita el panel de pistas).
+        numero = None
+        if es_crucigrama and p.posicion:
+            numero = p.posicion.get("numero")  # D3: null defensivo si falta
+        palabras_estado.append(
+            EstadoPalabraResponse(
+                id=p.id,
+                palabra=None if es_crucigrama else p.palabra,
+                texto_mostrar=None if es_crucigrama else p.texto_mostrar,
+                numero=numero,
+                encontrada=p.id in encontradas,
+                posicion=posicion,
+            )
+        )
+
+    grilla = partida.grilla
+    if es_crucigrama and grilla:
+        grilla = _sanitizar_grilla_crucigrama(grilla, posiciones_por_palabra)
+
+    return EstadoPartidaResponse(
+        codigo=partida.codigo,
+        tipo=partida.tipo,
+        estado=partida.estado,
+        grilla=grilla,
+        palabras=palabras_estado,
+    )
+
+
+def _get_o_crear_participacion(
+    db: Session, partida: Partida, usuario: Usuario, rol: str = "jugador"
+) -> Participacion:
+    """Auto-join perezoso: la primera vez que un usuario logueado interactúa
+    con la partida (unirse o marcar una palabra), se le crea su fila."""
+    participacion = (
+        db.query(Participacion)
+        .filter(Participacion.partida_id == partida.id, Participacion.usuario_id == usuario.id)
+        .first()
+    )
+    if participacion:
+        return participacion
+
+    participacion = Participacion(
+        id=uuid.uuid4(),
+        partida_id=partida.id,
+        usuario_id=usuario.id,
+        rol=rol,
+        iniciado_en=datetime.now(timezone.utc),
+    )
+    db.add(participacion)
+    db.flush()
+    return participacion
