@@ -19,7 +19,6 @@ from app.schemas.usuario import (
     UsuarioCreate,
     LoginRequest,
     UsuarioResponse,
-    RankingEntry,
     UnirseResponse,
 )
 
@@ -42,6 +41,5 @@ __all__ = [
     "UsuarioCreate",
     "LoginRequest",
     "UsuarioResponse",
-    "RankingEntry",
     "UnirseResponse",
 ]

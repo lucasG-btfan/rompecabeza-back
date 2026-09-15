@@ -18,7 +18,7 @@ from app.schemas.partida import (
     EncontradaResponse,
     RespuestaRequest,
 )
-from app.schemas.usuario import RankingEntry, UnirseResponse
+from app.schemas.usuario import UnirseResponse
 from app.services.sopa_generator import calcular_celda_final
 from app.services.texto import limpiar_para_grilla
 from app.routes.partidas.deps import (
@@ -30,19 +30,6 @@ from app.routes.partidas.deps import (
 )
 
 router = APIRouter(tags=["partidas"])
-
-
-def _calcular_puntaje(palabras_encontradas: int, tiempo_segundos: Optional[int]) -> int:
-    """
-    Fórmula simple y ajustable: 100 puntos por palabra, menos 1 punto por
-    segundo tardado, con un piso de 10 puntos por palabra (para que tardar
-    mucho nunca deje el puntaje en 0 o negativo si de hecho encontró algo).
-    """
-    base = palabras_encontradas * 100
-    piso = palabras_encontradas * 10
-    if tiempo_segundos is None:
-        return base
-    return max(base - tiempo_segundos, piso)
 
 
 def _registrar_hallazgo(
@@ -112,9 +99,10 @@ def unirse_partida(
     usuario: Optional[Usuario] = Depends(get_usuario_opcional),
 ):
     """
-    Llamar al entrar a jugar: arranca el cronómetro de la participación (para
-    el puntaje por tiempo). Funciona para invitados también, pero para ellos
-    no se persiste nada -- el modo 'invitado' es solo informativo.
+    Llamar al entrar a jugar: arranca el cronómetro de la participación
+    (de donde sale el tiempo final de la pantalla de completado). Funciona
+    para invitados también, pero para ellos no se persiste nada -- el modo
+    'invitado' es solo informativo.
     """
     partida = _get_partida_o_404(db, codigo)
 
@@ -154,8 +142,7 @@ def marcar_encontrada(
     como encontrada PARA ESA PARTICIPACIÓN.
 
     - Jugador logueado: se le crea su participación (si no existe) y se registra un
-      hallazgo propio, avanzando SÓLO en su progreso. El creador juega igual pero su
-      participación no puntúa (lo filtra el ranking).
+      hallazgo propio, avanzando SÓLO en su progreso. El creador juega igual.
     - Invitado: se valida la jugada y se devuelve encontrada=True, pero NO se persiste
       nada (no hay usuario que asociar) -- el front guarda su progreso en localStorage.
     """
@@ -194,8 +181,7 @@ def marcar_encontrada(
     if usuario is None:
         return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
 
-    # Jugador logueado: progreso PROPIO por participación (incluido el creador,
-    # que juega pero no puntúa en el ranking).
+    # Jugador logueado: progreso PROPIO por participación (incluido el creador).
     ahora = datetime.now(timezone.utc)
     rol = "creador" if _es_creador(partida, usuario) else "jugador"
     participacion = _get_o_crear_participacion(db, partida, usuario, rol=rol)
@@ -261,8 +247,7 @@ def responder_palabra(
     if usuario is None:
         return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
 
-    # Jugador logueado: progreso PROPIO por participación (incluido el creador,
-    # que juega pero no puntúa en el ranking).
+    # Jugador logueado: progreso PROPIO por participación (incluido el creador).
     ahora = datetime.now(timezone.utc)
     rol = "creador" if _es_creador(partida, usuario) else "jugador"
     participacion = _get_o_crear_participacion(db, partida, usuario, rol=rol)
@@ -272,33 +257,3 @@ def responder_palabra(
     db.refresh(palabra)
 
     return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
-
-
-@router.get("/partidas/{codigo}/ranking", response_model=list[RankingEntry])
-def obtener_ranking(codigo: str, db: Session = Depends(get_db)):
-    """Tabla de puntajes de la partida, ordenada de mayor a menor. Solo incluye jugadores registrados
-    (excluye al creador: no suma puntos al jugar su propia partida)."""
-    partida = _get_partida_o_404(db, codigo)
-
-    entradas = []
-    for participacion in partida.participaciones:
-        if participacion.usuario_id == partida.creador_id:
-            continue  # El creador no compite en su propia partida
-
-        tiempo_segundos = None
-        if participacion.iniciado_en and participacion.finalizado_en:
-            delta = participacion.finalizado_en - participacion.iniciado_en
-            tiempo_segundos = int(delta.total_seconds())
-
-        entradas.append(
-            RankingEntry(
-                username=participacion.usuario.username,
-                rol=participacion.rol,
-                palabras_encontradas=participacion.palabras_encontradas,
-                tiempo_segundos=tiempo_segundos,
-                puntaje=_calcular_puntaje(participacion.palabras_encontradas, tiempo_segundos),
-            )
-        )
-
-    entradas.sort(key=lambda e: e.puntaje, reverse=True)
-    return entradas

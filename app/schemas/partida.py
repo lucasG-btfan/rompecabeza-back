@@ -64,9 +64,16 @@ class PartidaResponse(BaseModel):
 
 
 class PalabraPublicaResponse(BaseModel):
-    """Igual a PalabraResponse pero SIN filtrar la posicion de palabras no encontradas."""
+    """Igual a PalabraResponse pero SIN filtrar la posicion de palabras no encontradas.
+
+    C-12 (D1): `palabra` es `Optional` según el rol del consultante en la vista
+    pública de un crucigrama — el creador autenticado la recibe completa (el
+    editor C-09 la necesita); cualquier no-creador la recibe `None` (anti-cheat).
+    En sopa siempre viaja completa: la lista de palabras ES el juego. La
+    `explicacion` (pista) es pública para todos los roles.
+    """
     id: UUID
-    palabra: str
+    palabra: Optional[str] = None
     texto_mostrar: Optional[str] = None
     explicacion: Optional[str]
     posicion: Optional[dict]  # Se fuerza a None si encontrada=False (ver route)
@@ -78,6 +85,11 @@ class PartidaPublicaResponse(BaseModel):
     Vista segura de una partida para exponer por GET /partidas/{codigo}.
     A diferencia de PartidaResponse, nunca revela `posicion` de una palabra
     todavía no encontrada (evita cheat leyendo el endpoint directamente).
+
+    C-12 (D1 REVISADO): `es_creador` informa si el consultante autenticado es
+    el creador de la partida (el front la usa para gatEAR la pantalla del
+    editor). Es del schema, no del tipo: la sopa la setea igual. Sin cookie
+    o con otra sesión, viaja `False`.
     """
     id: UUID
     codigo: str
@@ -86,6 +98,7 @@ class PartidaPublicaResponse(BaseModel):
     palabras: list[PalabraPublicaResponse]
     config: Optional[dict]
     creado_en: datetime
+    es_creador: bool = False
 
 
 # --------------------------------------------------------------------------

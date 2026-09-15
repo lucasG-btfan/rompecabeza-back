@@ -23,14 +23,6 @@ class UsuarioResponse(BaseModel):
         from_attributes = True
 
 
-class RankingEntry(BaseModel):
-    username: str
-    rol: str
-    palabras_encontradas: int
-    tiempo_segundos: Optional[int] = None
-    puntaje: int
-
-
 class UnirseResponse(BaseModel):
     modo: str  # "registrado" | "invitado"
     iniciado_en: Optional[datetime] = None

@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 import uuid
 import random
 import string
+from typing import Optional
 
 from app.database import get_db
-from app.auth import get_usuario_actual
+from app.auth import get_usuario_actual, get_usuario_opcional
 from app.models.usuario import Usuario
 from app.models.participacion import Participacion
 from app.models.partida import Partida
@@ -23,6 +24,7 @@ from app.schemas.partida import (
 from app.routes.partidas.deps import (
     _get_partida_o_404,
     _requerir_creador,
+    _es_creador,
     _validar_y_normalizar,
 )
 
@@ -128,19 +130,36 @@ def crear_partida(
 
 
 @router.get("/partidas/{codigo}", response_model=PartidaPublicaResponse)
-def obtener_partida(codigo: str, db: Session = Depends(get_db)):
+def obtener_partida(
+    codigo: str,
+    db: Session = Depends(get_db),
+    usuario: Optional[Usuario] = Depends(get_usuario_opcional),
+):
     """
     Vista pública de la partida. NO expone `posicion` de palabras todavía no
     encontradas (ver hallazgo de seguridad: antes este endpoint sí las filtraba).
     Accesible sin login: cualquiera con el código puede ver/jugar (soporta invitados).
+
+    C-12 (D1): en un crucigrama la solución (`palabra`/`texto_mostrar`) solo se
+    expone al creador autenticado — el editor (C-09) la necesita para mostrarla.
+    Cualquier otro rol (jugador registrado distinto o invitado anónimo) la recibe
+    `None`: la pista (`explicacion`) sigue siendo pública y la `posicion` de
+    palabras encontradas respeta la regla previa. La sopa no filtra nada.
+
+    C-12 (D1 REVISADO): `es_creador` viaja en la respuesta para que el front
+    gatee la pantalla del editor sin necesidad de otro endpoint.
     """
     partida = _get_partida_o_404(db, codigo)
+    # `_es_creador` asume un usuario autenticado (accede a `usuario.id`);
+    # sin sesión no puede ser creador, nunca crashea.
+    es_creador = usuario is not None and _es_creador(partida, usuario)
+    ocultar_solucion = partida.tipo == "crucigrama" and not es_creador
 
     palabras = [
         PalabraPublicaResponse(
             id=p.id,
-            palabra=p.palabra,
-            texto_mostrar=p.texto_mostrar,
+            palabra=None if ocultar_solucion else p.palabra,
+            texto_mostrar=None if ocultar_solucion else p.texto_mostrar,
             explicacion=p.explicacion,
             posicion=p.posicion if p.encontrada else None,
             encontrada=p.encontrada,
@@ -156,6 +175,7 @@ def obtener_partida(codigo: str, db: Session = Depends(get_db)):
         palabras=palabras,
         config=partida.config,
         creado_en=partida.creado_en,
+        es_creador=es_creador,
     )
 
 
