@@ -208,6 +208,7 @@ def obtener_editor_partida(
         tipo=partida.tipo,
         estado=partida.estado,
         palabras=palabras,
+        nombre=partida.nombre,  # C-15: nombre opcional asignado por el creador
     )
 
 

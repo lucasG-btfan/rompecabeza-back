@@ -355,6 +355,24 @@ def test_get_editor_200_creador_con_posiciones(client, db_sesion):
     assert por_texto["LUNA"]["posicion"] is None
 
 
+def test_get_editor_incluye_nombre(client):
+    """C-15: el editor del creador incluye el `nombre` persistido (read-only).
+
+    Escenario del spec `partida-nombre`: "Editor del creador incluye nombre".
+    El editor se construye con EditorPartidaResponse; si no se pasa
+    `nombre=partida.nombre` el default del schema serializa null aunque la
+    partida tenga nombre asignado.
+    """
+    codigo = _crear_partida(client, "crucigrama", PALABRAS_CASA_SOL_LUNA)
+
+    res = client.patch(f"/api/partidas/{codigo}/nombre", json={"nombre": "Tema Navidad"})
+    assert res.status_code == 200, res.text
+
+    res = client.get(f"/api/partidas/{codigo}/editor")
+    assert res.status_code == 200, res.text
+    assert res.json()["nombre"] == "Tema Navidad"
+
+
 def test_get_editor_no_creador_403(client):
     codigo = _crear_partida(client, "crucigrama", PALABRAS_CASA_SOL_LUNA)
 

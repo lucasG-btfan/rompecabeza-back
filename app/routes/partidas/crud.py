@@ -20,6 +20,7 @@ from app.schemas.partida import (
     PalabraResponse,
     PalabraCreate,
     ResumenPartidaResponse,
+    ActualizarNombrePartidaRequest,
 )
 from app.routes.partidas.deps import (
     _get_partida_o_404,
@@ -38,6 +39,21 @@ def generar_codigo(db: Session) -> str:
         existing = db.query(Partida).filter(Partida.codigo == codigo).first()
         if not existing:
             return codigo
+
+
+def _resumen_partida(partida: Partida) -> ResumenPartidaResponse:
+    """Resumen de una partida para 'Mis partidas' y el PATCH de nombre (C-15/C-16)."""
+    palabras = partida.palabras
+    return ResumenPartidaResponse(
+        id=partida.id,
+        codigo=partida.codigo,
+        tipo=partida.tipo,
+        estado=partida.estado,
+        creado_en=partida.creado_en,
+        palabras_total=len(palabras),
+        palabras_encontradas=sum(1 for p in palabras if p.encontrada),
+        nombre=partida.nombre,
+    )
 
 
 @router.get("/partidas", response_model=list[ResumenPartidaResponse])
@@ -61,19 +77,7 @@ def listar_mis_partidas(
 
     resultado = []
     for participacion in participaciones:
-        partida = participacion.partida
-        palabras = partida.palabras
-        resultado.append(
-            ResumenPartidaResponse(
-                id=partida.id,
-                codigo=partida.codigo,
-                tipo=partida.tipo,
-                estado=partida.estado,
-                creado_en=partida.creado_en,
-                palabras_total=len(palabras),
-                palabras_encontradas=sum(1 for p in palabras if p.encontrada),
-            )
-        )
+        resultado.append(_resumen_partida(participacion.partida))
     return resultado
 
 
@@ -93,6 +97,7 @@ def crear_partida(
         config=req.config or {},
         estado="creando",
         creador_id=usuario.id,
+        nombre=req.nombre,  # C-16 (D10): ya normalizado por el validador (None o trim)
     )
     db.add(partida)
     db.flush()  
@@ -126,6 +131,7 @@ def crear_partida(
         codigo=partida.codigo,
         tipo=partida.tipo,
         estado=partida.estado,
+        nombre=partida.nombre,  # C-16 (D11): nombre persistido en la creación
     )
 
 
@@ -176,6 +182,7 @@ def obtener_partida(
         config=partida.config,
         creado_en=partida.creado_en,
         es_creador=es_creador,
+        nombre=partida.nombre,  # C-16: el GET público refleja el nombre persistido
     )
 
 
@@ -227,3 +234,26 @@ def eliminar_partida(
 
     db.delete(partida)
     db.commit()
+
+
+@router.patch("/partidas/{codigo}/nombre", response_model=ResumenPartidaResponse)
+def actualizar_nombre_partida(
+    codigo: str,
+    req: ActualizarNombrePartidaRequest,
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(get_usuario_actual),
+):
+    """Asigna/modifica/limpia el nombre de una partida (C-15). Solo el creador.
+
+    El body llega normalizado por `ActualizarNombrePartidaRequest` (trim +
+    vacío/whitespace → None, max 50, `extra='forbid'`). La respuesta es el
+    resumen completo, paridad con 'Mis partidas'.
+    """
+    partida = _get_partida_o_404(db, codigo)
+    _requerir_creador(partida, usuario)
+
+    partida.nombre = req.nombre
+    db.commit()
+    db.refresh(partida)
+
+    return _resumen_partida(partida)

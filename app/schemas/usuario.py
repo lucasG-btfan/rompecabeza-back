@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
 
 
 class UsuarioCreate(BaseModel):
@@ -24,5 +23,4 @@ class UsuarioResponse(BaseModel):
 
 
 class UnirseResponse(BaseModel):
-    modo: str  # "registrado" | "invitado"
-    iniciado_en: Optional[datetime] = None
+    modo: str  # "registrado" | "invitado" — el cronómetro es 100% frontend (C-14)

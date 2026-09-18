@@ -98,7 +98,8 @@ def _respuesta(client, codigo, palabra_id, letras):
 
 
 def test_respuesta_acierto_registrado_feliz(client, db_sesion):
-    """Acierto de jugador registrado: hallazgo propio + progreso + posicion."""
+    """Acierto de jugador registrado: 200 + posicion, SIN participación de
+    jugador ni hallazgo (progreso efímero C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     _registrar(client, prefijo="c10b")  # jugador B (la cookie del creador se reemplaza)
@@ -109,21 +110,17 @@ def test_respuesta_acierto_registrado_feliz(client, db_sesion):
     assert body["encontrada"] is True
     assert body["posicion"] == {"fila": 0, "columna": 0, "orientacion": "H", "numero": 1}
 
+    # Nada se persiste: solo el creador tiene participación y no hay hallazgos.
     partida = db_sesion.query(Partida).filter(Partida.codigo == codigo).one()
-    jugador = next(p for p in partida.participaciones if p.rol == "jugador")
-    assert jugador.palabras_encontradas == 1
-    assert jugador.finalizado_en is None  # todavía faltan ORO y AS
-    assert {h.palabra_id for h in jugador.hallazgos} == {uuid.UUID(pato)}
-    assert jugador.hallazgos[0].posicion == {
-        "fila": 0,
-        "columna": 0,
-        "orientacion": "H",
-        "numero": 1,
-    }
+    assert len(partida.participaciones) == 1
+    assert partida.participaciones[0].rol == "creador"
+    assert partida.participaciones[0].hallazgos == []
+    assert partida.participaciones[0].palabras_encontradas == 0
 
 
-def test_respuesta_completa_finaliza_participacion(client, db_sesion):
-    """Al encontrar la última palabra, la participación se marca finalizada."""
+def test_respuesta_completa_sin_finalizacion(client, db_sesion):
+    """Completar las 3 palabras responde 200 para todas, sin participación de
+    jugador ni finalización: el backend no persiste progreso (C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     oro = _palabra_id(client, codigo, "ORO")
@@ -134,12 +131,14 @@ def test_respuesta_completa_finaliza_participacion(client, db_sesion):
     assert _respuesta(client, codigo, as_, "AS").status_code == 200
     res = _respuesta(client, codigo, oro, "ORO")
     assert res.status_code == 200, res.text
+    assert res.json()["encontrada"] is True
 
     partida = db_sesion.query(Partida).filter(Partida.codigo == codigo).one()
-    jugador = next(p for p in partida.participaciones if p.rol == "jugador")
-    assert jugador.palabras_encontradas == 3
-    assert jugador.finalizado_en is not None
-    assert len(jugador.hallazgos) == 3
+    assert len(partida.participaciones) == 1  # solo el creador
+    assert partida.participaciones[0].rol == "creador"
+    assert partida.participaciones[0].hallazgos == []
+    assert partida.participaciones[0].palabras_encontradas == 0
+    assert partida.participaciones[0].finalizado_en is None
 
 
 def test_respuesta_letras_incorrectas_400(client, db_sesion):
@@ -152,7 +151,7 @@ def test_respuesta_letras_incorrectas_400(client, db_sesion):
     assert res.status_code == 400, res.text
     assert "no coinciden" in res.json()["detail"]
 
-    # El auto-join es solo para aciertos: un intento fallido no crea fila.
+    # Ninguna jugada persiste: un intento fallido no crea ni toca filas.
     partida = db_sesion.query(Partida).filter(Partida.codigo == codigo).one()
     assert len(partida.participaciones) == 1  # solo el creador
     assert partida.participaciones[0].rol == "creador"
@@ -257,8 +256,9 @@ def test_respuesta_campo_extra_422(client):
     assert res.status_code == 422, res.text
 
 
-def test_respuesta_reintento_no_duplica_hallazgo(client, db_sesion):
-    """Responder dos veces la misma palabra no duplica hallazgo ni progreso."""
+def test_respuesta_reintento_no_duplica_nada(client, db_sesion):
+    """Responder dos veces la misma palabra responde 200 ambas veces sin
+    efectos en la base: ya no hay hallazgo que duplicar (C-14)."""
     codigo = _crucigrama_pato(client)
     as_ = _palabra_id(client, codigo, "AS")
     _registrar(client, prefijo="c10f")
@@ -267,9 +267,10 @@ def test_respuesta_reintento_no_duplica_hallazgo(client, db_sesion):
     assert _respuesta(client, codigo, as_, "AS").status_code == 200
 
     partida = db_sesion.query(Partida).filter(Partida.codigo == codigo).one()
-    jugador = next(p for p in partida.participaciones if p.rol == "jugador")
-    assert jugador.palabras_encontradas == 1
-    assert len(jugador.hallazgos) == 1
+    assert len(partida.participaciones) == 1  # solo el creador
+    assert partida.participaciones[0].rol == "creador"
+    assert partida.participaciones[0].hallazgos == []
+    assert partida.participaciones[0].palabras_encontradas == 0
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +317,9 @@ def test_estado_crucigrama_sin_progreso_sanitizado(client):
         assert p["numero"] in {1, 2, 3}
 
 
-def test_estado_crucigrama_descubrimiento_progresivo(client):
-    """El jugador que encontró una palabra ve sus letras; el resto no (progreso
-    individual por participación)."""
+def test_estado_crucigrama_siempre_ciego(client):
+    """Tras responder PATO correctamente, el estado sigue 100% ciego para el
+    mismo jugador: sin descubrimiento progresivo (C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     _registrar(client, prefijo="c10g")
@@ -329,31 +330,10 @@ def test_estado_crucigrama_descubrimiento_progresivo(client):
     assert res.status_code == 200, res.text
     body = res.json()
     celdas = body["grilla"]["celdas"]
+    assert all(c["letra"] is None for c in celdas)
 
-    # Celdas de PATO (índices 0..3) reveladas con su letra; el resto ocultas.
-    assert [celdas[i]["letra"] for i in range(4)] == ["P", "A", "T", "O"]
-    assert celdas[5]["letra"] is None  # S de AS sigue oculta
-    assert celdas[7]["letra"] is None  # R de ORO sigue oculta
-    assert celdas[11]["letra"] is None  # O de ORO sigue oculta
-
-    # La palabra encontrada revela posicion y numero; las otras no.
     por_id = {p["id"]: p for p in body["palabras"]}
-    pato_estado = por_id[pato]
-    assert pato_estado["encontrada"] is True
-    assert pato_estado["posicion"] == {
-        "fila": 0,
-        "columna": 0,
-        "orientacion": "H",
-        "numero": 1,
-    }
-    others = [p for p in por_id.values() if p["id"] != pato]
-    assert all(p["encontrada"] is False and p["posicion"] is None for p in others)
-
-    # Un tercer jugador SIN progreso ve todo oculto (progreso individual).
-    _registrar(client, prefijo="c10h")
-    res2 = client.get(f"/api/partidas/{codigo}/estado")
-    assert res2.status_code == 200, res2.text
-    assert all(c["letra"] is None for c in res2.json()["grilla"]["celdas"])
+    assert all(p["encontrada"] is False and p["posicion"] is None for p in por_id.values())
 
 
 def test_estado_crucigrama_numero_null_defensivo(client, db_sesion):

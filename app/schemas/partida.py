@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from uuid import UUID
 from datetime import datetime
 from typing import Optional, Literal
@@ -33,14 +33,33 @@ class EditorPartidaResponse(BaseModel):
     tipo: str
     estado: str
     palabras: list[PalabraResponse]
+    nombre: Optional[str] = None  # C-15: nombre opcional asignado por el creador
 
     model_config = ConfigDict(extra="forbid")
 
 
 class CrearPartidaRequest(BaseModel):
+    """Body del POST /partidas (C-16): `nombre` opcional con la misma
+    semántica de "sin nombre = NULL" que C-15 (`ActualizarNombrePartidaRequest`).
+
+    El validador trimea de espacios y un string vacío/whitespace se normaliza
+    a `None`. `extra='forbid'` (regla dura 5): campo no declarado → 422.
+    """
+
     tipo: str = Field(..., pattern="^(sopa|crucigrama)$")
     palabras: list[PalabraCreate] = Field(..., min_length=1)
     config: Optional[dict] = None
+    nombre: Optional[str] = Field(None, max_length=50)  # C-16: opcional, patrón C-15
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("nombre")
+    @classmethod
+    def _normalizar_nombre(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 
 class CrearPartidaResponse(BaseModel):
@@ -48,6 +67,7 @@ class CrearPartidaResponse(BaseModel):
     codigo: str
     tipo: str
     estado: str
+    nombre: Optional[str] = None  # C-16: nombre persistido en la creación (D11)
 
 
 class PartidaResponse(BaseModel):
@@ -99,6 +119,7 @@ class PartidaPublicaResponse(BaseModel):
     config: Optional[dict]
     creado_en: datetime
     es_creador: bool = False
+    nombre: Optional[str] = None  # C-15: nombre opcional asignado por el creador
 
 
 # --------------------------------------------------------------------------
@@ -199,10 +220,15 @@ class EstadoPartidaResponse(BaseModel):
 
 
 class EncontradaRequest(BaseModel):
+    """Body del PUT /palabras/{id}/encontrada de sopa. `extra='forbid'`
+    (regla dura 5): campo no declarado → 422."""
+
     fila_inicio: int = Field(..., ge=0)
     columna_inicio: int = Field(..., ge=0)
     fila_fin: int = Field(..., ge=0)
     columna_fin: int = Field(..., ge=0)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class RespuestaRequest(BaseModel):
@@ -232,3 +258,25 @@ class ResumenPartidaResponse(BaseModel):
     creado_en: datetime
     palabras_total: int
     palabras_encontradas: int
+    nombre: Optional[str] = None  # C-15: nombre opcional asignado por el creador
+
+
+class ActualizarNombrePartidaRequest(BaseModel):
+    """Body del PATCH /partidas/{codigo}/nombre (C-15).
+
+    El nombre es opcional (null limpia). Se trimea de espacios y un string
+    vacío se normaliza a null: no se persiste un string vacío (la semántica
+    de "sin nombre" es siempre NULL). `extra='forbid'` (regla dura 5).
+    """
+
+    nombre: Optional[str] = Field(None, max_length=50)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("nombre")
+    @classmethod
+    def _normalizar_nombre(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None

@@ -17,6 +17,7 @@ class Partida(Base):
     creador_id = Column(UUID(as_uuid=True), ForeignKey("usuarios.id"), nullable=True)
     creado_en = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     estado = Column(String(20), default="creando")  # 'creando', 'activo', 'finalizado'
+    nombre = Column(String(50), nullable=True)  # C-15: nombre opcional, solo creador
     config = Column(JSON, default=dict)
     grilla = Column(JSON, nullable=True)  # Matriz de letras generada al finalizar (sopa)
 

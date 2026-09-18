@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
@@ -8,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.models.partida import Partida
 from app.models.palabra import Palabra
 from app.models.usuario import Usuario
-from app.models.participacion import Participacion
 from app.schemas.partida import (
     EstadoPalabraResponse,
     EstadoPartidaResponse,
@@ -77,12 +75,41 @@ def _validar_y_normalizar(
     return limpia, texto_a_mostrar(texto)
 
 
-def _hallazgos_ids(participacion: Optional[Participacion]) -> set[uuid.UUID]:
-    """IDs de palabras que una participación encontró. Si no hay participación
-    (invitado), devuelve vacío: el invitado no tiene progreso persistido."""
-    if participacion is None:
-        return set()
-    return {h.palabra_id for h in participacion.hallazgos}
+def _estado_response(db: Session, partida: Partida) -> EstadoPartidaResponse:
+    """Fotografía de la partida SIN progreso por jugador (C-14): todas las
+    palabras salen `encontrada=False` / `posicion=None` y en crucigrama la
+    grilla viaja siempre ciega (ninguna letra revelada). `db` se conserva en
+    la firma por compatibilidad con los llamadores (editor.py)."""
+    es_crucigrama = partida.tipo == "crucigrama"
+    palabras_estado = []
+    for p in partida.palabras:
+        # C-10 (D2): en crucigrama la solución no se expone en el estado de la
+        # palabra; el numero de pista sí (lo necesita el panel de pistas).
+        numero = None
+        if es_crucigrama and p.posicion:
+            numero = p.posicion.get("numero")  # D3: null defensivo si falta
+        palabras_estado.append(
+            EstadoPalabraResponse(
+                id=p.id,
+                palabra=None if es_crucigrama else p.palabra,
+                texto_mostrar=None if es_crucigrama else p.texto_mostrar,
+                numero=numero,
+                encontrada=False,
+                posicion=None,
+            )
+        )
+
+    grilla = partida.grilla
+    if es_crucigrama and grilla:
+        grilla = _sanitizar_grilla_crucigrama(grilla, {})
+
+    return EstadoPartidaResponse(
+        codigo=partida.codigo,
+        tipo=partida.tipo,
+        estado=partida.estado,
+        grilla=grilla,
+        palabras=palabras_estado,
+    )
 
 
 def _sanitizar_grilla_crucigrama(
@@ -135,71 +162,3 @@ def _sanitizar_grilla_crucigrama(
     palabras = [dict(w, texto=None) for w in palabras_grilla]
 
     return {"celdas": celdas, "palabras": palabras}
-
-
-def _estado_response(
-    db: Session, partida: Partida, participacion: Optional[Participacion] = None
-) -> EstadoPartidaResponse:
-    """guarda las palabras encontradas, para invitados no se guarda el resultado de las partidas"""
-    encontradas = _hallazgos_ids(participacion)
-    posiciones_por_palabra: dict[uuid.UUID, dict] = {}
-    if participacion is not None:
-        for h in participacion.hallazgos:
-            posiciones_por_palabra[h.palabra_id] = h.posicion
-
-    es_crucigrama = partida.tipo == "crucigrama"
-    palabras_estado = []
-    for p in partida.palabras:
-        posicion = p.posicion if p.id in encontradas else None
-        # C-10 (D2): en crucigrama la solución no se expone en el estado de la
-        # palabra; el numero de pista sí (lo necesita el panel de pistas).
-        numero = None
-        if es_crucigrama and p.posicion:
-            numero = p.posicion.get("numero")  # D3: null defensivo si falta
-        palabras_estado.append(
-            EstadoPalabraResponse(
-                id=p.id,
-                palabra=None if es_crucigrama else p.palabra,
-                texto_mostrar=None if es_crucigrama else p.texto_mostrar,
-                numero=numero,
-                encontrada=p.id in encontradas,
-                posicion=posicion,
-            )
-        )
-
-    grilla = partida.grilla
-    if es_crucigrama and grilla:
-        grilla = _sanitizar_grilla_crucigrama(grilla, posiciones_por_palabra)
-
-    return EstadoPartidaResponse(
-        codigo=partida.codigo,
-        tipo=partida.tipo,
-        estado=partida.estado,
-        grilla=grilla,
-        palabras=palabras_estado,
-    )
-
-
-def _get_o_crear_participacion(
-    db: Session, partida: Partida, usuario: Usuario, rol: str = "jugador"
-) -> Participacion:
-    """Auto-join perezoso: la primera vez que un usuario logueado interactúa
-    con la partida (unirse o marcar una palabra), se le crea su fila."""
-    participacion = (
-        db.query(Participacion)
-        .filter(Participacion.partida_id == partida.id, Participacion.usuario_id == usuario.id)
-        .first()
-    )
-    if participacion:
-        return participacion
-
-    participacion = Participacion(
-        id=uuid.uuid4(),
-        partida_id=partida.id,
-        usuario_id=usuario.id,
-        rol=rol,
-        iniciado_en=datetime.now(timezone.utc),
-    )
-    db.add(participacion)
-    db.flush()
-    return participacion
