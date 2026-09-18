@@ -18,6 +18,7 @@ class Settings(BaseSettings):
         default=["http://localhost:5173", "http://localhost:3000"],
         validation_alias=AliasChoices("ALLOWED_ORIGINS", "CORS_ORIGINS", "cors_origins"),
     )
+    cors_origin_regex: str | None = None
 
 
 @lru_cache
