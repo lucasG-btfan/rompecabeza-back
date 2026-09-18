@@ -9,6 +9,7 @@ from app.auth import get_usuario_opcional
 from app.models.partida import Partida
 from app.models.palabra import Palabra
 from app.models.usuario import Usuario
+from app.models.emparejamiento import EmparejamientoEstado
 from app.schemas.partida import (
     EstadoPartidaResponse,
     EncontradaRequest,
@@ -22,6 +23,11 @@ from app.routes.partidas.deps import (
     _get_partida_o_404,
     _get_palabra_o_404,
     _estado_response,
+)
+from app.routes.emparejamientos import (
+    _emparejamiento_activo_de,
+    _intentar_emparejar,
+    _now_utc,
 )
 
 router = APIRouter(tags=["partidas"])
@@ -66,6 +72,36 @@ def unirse_partida(
     if usuario is None:
         return UnirseResponse(modo="invitado")
 
+    # C-17 (D15): si el usuario YA es parte de un duelo `emparejado` en esta
+    # partida, el primer `unirse` de cualquiera de los dos marca `iniciado_en`
+    # (a partir de ahí el duelo queda vivo y ya no expira por D15).
+    fila_propia = _emparejamiento_activo_de(db, usuario.id, partida.id)
+    if (
+        fila_propia is not None
+        and fila_propia.estado == EmparejamientoEstado.EMPAREJADO.value
+    ):
+        if fila_propia.iniciado_en is None:
+            fila_propia.iniciado_en = _now_utc()
+            db.commit()
+        return UnirseResponse(modo="registrado", emparejado=True)
+
+    # El creador nunca se auto-empareja en su propia partida (DD-07): si
+    # alguien está esperando ahí, el duelo es para un tercero.
+    if partida.creador_id == usuario.id:
+        return UnirseResponse(modo="registrado")
+
+    # Auto-match (D9): match-only sobre la espera de OTRO jugador; jamás se
+    # crea una espera acá (el solitario no cambia el contrato C-14).
+    fila = _intentar_emparejar(db, partida, usuario, crear_espera=False)
+    if fila is None:
+        return UnirseResponse(modo="registrado")
+    if fila.estado == EmparejamientoEstado.EMPAREJADO.value:
+        # Primer unirse tras el match → marca el inicio del duelo (D15).
+        if fila.iniciado_en is None:
+            fila.iniciado_en = _now_utc()
+            db.commit()
+        return UnirseResponse(modo="registrado", emparejado=True)
+    # La fila sigue `esperando`: es nuestra (self-match evitado).
     return UnirseResponse(modo="registrado")
 
 

@@ -23,6 +23,7 @@ TEST_DB_NAME = "rompecabezas_test"
 TABLAS_A_LIMPIAR = [
     "hallazgos",
     "participaciones",
+    "emparejamientos",  # C-17: referencia partidas y usuarios
     "palabras",
     "partidas",
     "usuarios",

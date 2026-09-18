@@ -259,6 +259,7 @@ class ResumenPartidaResponse(BaseModel):
     palabras_total: int
     palabras_encontradas: int
     nombre: Optional[str] = None  # C-15: nombre opcional asignado por el creador
+    en_duelo: bool = False  # C-17 (D10): la partida tiene un duelo 1v1 activo
 
 
 class ActualizarNombrePartidaRequest(BaseModel):

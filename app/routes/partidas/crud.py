@@ -11,6 +11,8 @@ from app.models.usuario import Usuario
 from app.models.participacion import Participacion
 from app.models.partida import Partida
 from app.models.palabra import Palabra
+from app.models.emparejamiento import Emparejamiento
+from app.routes.emparejamientos import ESTADOS_ACTIVOS, _reciclar_esperas_vencidas
 from app.schemas.partida import (
     CrearPartidaRequest,
     CrearPartidaResponse,
@@ -41,7 +43,20 @@ def generar_codigo(db: Session) -> str:
             return codigo
 
 
-def _resumen_partida(partida: Partida) -> ResumenPartidaResponse:
+def _en_duelo_de(db: Session, partida_id: uuid.UUID) -> bool:
+    """C-17 (D10): la partida tiene un emparejamiento 1v1 activo."""
+    return (
+        db.query(Emparejamiento.id)
+        .filter(
+            Emparejamiento.partida_id == partida_id,
+            Emparejamiento.estado.in_(ESTADOS_ACTIVOS),
+        )
+        .first()
+        is not None
+    )
+
+
+def _resumen_partida(partida: Partida, en_duelo: bool = False) -> ResumenPartidaResponse:
     """Resumen de una partida para 'Mis partidas' y el PATCH de nombre (C-15/C-16)."""
     palabras = partida.palabras
     return ResumenPartidaResponse(
@@ -53,6 +68,7 @@ def _resumen_partida(partida: Partida) -> ResumenPartidaResponse:
         palabras_total=len(palabras),
         palabras_encontradas=sum(1 for p in palabras if p.encontrada),
         nombre=partida.nombre,
+        en_duelo=en_duelo,
     )
 
 
@@ -75,9 +91,14 @@ def listar_mis_partidas(
         .all()
     )
 
+    # D4: punto de lectura del duelo → reciclar esperas vencidas antes de
+    # computar `en_duelo` (paridad con el lobby).
+    _reciclar_esperas_vencidas(db)
+
     resultado = []
     for participacion in participaciones:
-        resultado.append(_resumen_partida(participacion.partida))
+        partida = participacion.partida
+        resultado.append(_resumen_partida(partida, _en_duelo_de(db, partida.id)))
     return resultado
 
 
@@ -256,4 +277,4 @@ def actualizar_nombre_partida(
     db.commit()
     db.refresh(partida)
 
-    return _resumen_partida(partida)
+    return _resumen_partida(partida, _en_duelo_de(db, partida.id))

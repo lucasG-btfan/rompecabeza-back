@@ -3,9 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import engine, Base
-from app.routes import partidas, auth
+from app.routes import partidas, auth, emparejamientos, lobby
 
-from app.models import Partida, Palabra, Usuario, Participacion  
+from app.models import Partida, Palabra, Usuario, Participacion, Emparejamiento  
 
 settings = get_settings()
 
@@ -25,6 +25,8 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(partidas.router, prefix="/api")
+app.include_router(emparejamientos.router, prefix="/api")
+app.include_router(lobby.router, prefix="/api")
 
 
 @app.on_event("startup")
