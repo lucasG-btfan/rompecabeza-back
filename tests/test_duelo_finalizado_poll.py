@@ -16,6 +16,8 @@ Requisito "Resultado del duelo en el polling":
 - abandono sin `iniciado_en` (borde D9/D14) → `tiempo_total_seg: 0`.
 - (extra, same spec `lobby`) `partida.en_duelo` es False cuando el duelo
   terminó — la partida ya no está ocupada por un duelo activo.
+- C-23 (D7): en estado `esperando` el objeto `partida` viaja con
+  `en_duelo: false` + `en_espera: true` (una espera no es un duelo formado).
 
 PostgreSQL real (regla dura 4): fixtures `client`/`db_sesion` de conftest.
 """
@@ -254,6 +256,52 @@ def test_poll_abandono_sin_iniciar_tiempo_cero(client, db_sesion):
         body = _estado(c_b)
         assert body["estado"] == "finalizado"
         assert body["resultado"]["tiempo_total_seg"] == 0
+    finally:
+        c_creador.close()
+        c_a.close()
+        c_b.close()
+
+
+# ---------------------------------------------------------------------------
+# C-23: flags del objeto `partida` en el poll (D7)
+# ---------------------------------------------------------------------------
+
+
+def test_poll_esperando_reporte_en_espera(client, db_sesion):
+    """C-23 (3.4/D7): en estado `esperando` el objeto `partida` del poll viaja
+    con `en_duelo: false` + `en_espera: true` — la espera PROPIA se reporta
+    como espera, no como duelo formado."""
+    c_creador, _ = _client_nuevo("p7cr")
+    c_a, _ = _client_nuevo("p7a")
+    try:
+        codigo = _crear_y_publicar(c_creador)
+        res = c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.status_code in (200, 201), res.text
+        assert res.json()["estado"] == "esperando"
+
+        body = _estado(c_a)
+        assert body["estado"] == "esperando"
+        assert body["partida"]["en_duelo"] is False
+        assert body["partida"]["en_espera"] is True
+    finally:
+        c_creador.close()
+        c_a.close()
+
+
+def test_poll_emparejado_reporte_en_duelo(client, db_sesion):
+    """C-23 (3.1/D7): en estado `emparejado` el objeto `partida` viaja con
+    `en_duelo: true` + `en_espera: false`."""
+    c_creador, _ = _client_nuevo("p8cr")
+    c_a, _ = _client_nuevo("p8a")
+    c_b, _ = _client_nuevo("p8b")
+    try:
+        codigo = _crear_y_publicar(c_creador)
+        _match_y_unirse(c_creador, c_a, c_b, codigo)
+
+        body = _estado(c_a)
+        assert body["estado"] == "emparejado"
+        assert body["partida"]["en_duelo"] is True
+        assert body["partida"]["en_espera"] is False
     finally:
         c_creador.close()
         c_a.close()

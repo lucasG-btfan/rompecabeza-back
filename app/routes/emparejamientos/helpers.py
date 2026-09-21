@@ -191,23 +191,50 @@ def _ultima_fila_de(db: Session, usuario_id: uuid.UUID) -> Optional[Emparejamien
 
 
 def _partida_lobby(db: Session, partida: Partida) -> PartidaLobbyResponse:
-    """Metadatos anti-cheat de una partida para el lobby / estado del duelo."""
+    """Metadatos anti-cheat de una partida para el lobby / estado del duelo.
+
+    C-23 (D2): `en_duelo` (duelo formado) y `en_espera` (espera de rival
+    pendiente) se computan con la semántica nueva — el poll hereda ambos.
+    """
     return PartidaLobbyResponse(
         codigo=partida.codigo,
         tipo=partida.tipo,
         cantidad_palabras=len(partida.palabras),
         nombre=partida.nombre,
         en_duelo=_partida_en_duelo(db, partida.id),
+        en_espera=_partida_en_espera(db, partida.id),
     )
 
 
 def _partida_en_duelo(db: Session, partida_id: uuid.UUID) -> bool:
-    """True si la partida tiene un emparejamiento activo (esperando|emparejado)."""
+    """True SOLO si el duelo está formado (`emparejado`).
+
+    C-23 (D1): una espera de rival (`esperando`) NO es un duelo — se reporta
+    con `en_espera`. Antes esto miraba `ESTADOS_ACTIVOS` y una espera ajena
+    bloqueaba el 1v1 en la UI.
+    """
     return (
         db.query(Emparejamiento.id)
         .filter(
             Emparejamiento.partida_id == partida_id,
-            Emparejamiento.estado.in_(ESTADOS_ACTIVOS),
+            Emparejamiento.estado == EmparejamientoEstado.EMPAREJADO.value,
+        )
+        .first()
+        is not None
+    )
+
+
+def _partida_en_espera(db: Session, partida_id: uuid.UUID) -> bool:
+    """True SOLO si hay una espera de rival pendiente (`esperando`).
+
+    Post-reciclaje lazy: las filas `esperando` vencidas ya viajaron a
+    `expirado` antes de llegar acá (los puntos de lectura reciclan primero).
+    """
+    return (
+        db.query(Emparejamiento.id)
+        .filter(
+            Emparejamiento.partida_id == partida_id,
+            Emparejamiento.estado == EmparejamientoEstado.ESPERANDO.value,
         )
         .first()
         is not None

@@ -11,8 +11,8 @@ from app.models.usuario import Usuario
 from app.models.participacion import Participacion
 from app.models.partida import Partida
 from app.models.palabra import Palabra
-from app.models.emparejamiento import Emparejamiento
-from app.routes.emparejamientos import ESTADOS_ACTIVOS, _reciclar_esperas_vencidas
+from app.models.emparejamiento import Emparejamiento, EmparejamientoEstado
+from app.routes.emparejamientos import _reciclar_esperas_vencidas
 from app.schemas.partida import (
     CrearPartidaRequest,
     CrearPartidaResponse,
@@ -44,19 +44,41 @@ def generar_codigo(db: Session) -> str:
 
 
 def _en_duelo_de(db: Session, partida_id: uuid.UUID) -> bool:
-    """C-17 (D10): la partida tiene un emparejamiento 1v1 activo."""
+    """C-17 (D10) + C-23 (D1): la partida tiene un duelo 1v1 FORMADO
+    (`emparejado`). Una espera de rival (`esperando`) ya no cuenta como duelo
+    — se reporta con `_en_espera_de`.
+    """
     return (
         db.query(Emparejamiento.id)
         .filter(
             Emparejamiento.partida_id == partida_id,
-            Emparejamiento.estado.in_(ESTADOS_ACTIVOS),
+            Emparejamiento.estado == EmparejamientoEstado.EMPAREJADO.value,
         )
         .first()
         is not None
     )
 
 
-def _resumen_partida(partida: Partida, en_duelo: bool = False) -> ResumenPartidaResponse:
+def _en_espera_de(db: Session, partida_id: uuid.UUID) -> bool:
+    """C-23 (D1): la partida tiene una espera de rival pendiente (`esperando`).
+
+    Se computa post-reciclaje lazy (`_reciclar_esperas_vencidas`), paridad con
+    el lobby.
+    """
+    return (
+        db.query(Emparejamiento.id)
+        .filter(
+            Emparejamiento.partida_id == partida_id,
+            Emparejamiento.estado == EmparejamientoEstado.ESPERANDO.value,
+        )
+        .first()
+        is not None
+    )
+
+
+def _resumen_partida(
+    partida: Partida, en_duelo: bool = False, en_espera: bool = False
+) -> ResumenPartidaResponse:
     """Resumen de una partida para 'Mis partidas' y el PATCH de nombre (C-15/C-16)."""
     palabras = partida.palabras
     return ResumenPartidaResponse(
@@ -69,6 +91,7 @@ def _resumen_partida(partida: Partida, en_duelo: bool = False) -> ResumenPartida
         palabras_encontradas=sum(1 for p in palabras if p.encontrada),
         nombre=partida.nombre,
         en_duelo=en_duelo,
+        en_espera=en_espera,
     )
 
 
@@ -98,7 +121,13 @@ def listar_mis_partidas(
     resultado = []
     for participacion in participaciones:
         partida = participacion.partida
-        resultado.append(_resumen_partida(partida, _en_duelo_de(db, partida.id)))
+        resultado.append(
+            _resumen_partida(
+                partida,
+                _en_duelo_de(db, partida.id),
+                _en_espera_de(db, partida.id),
+            )
+        )
     return resultado
 
 
@@ -277,4 +306,4 @@ def actualizar_nombre_partida(
     db.commit()
     db.refresh(partida)
 
-    return _resumen_partida(partida, _en_duelo_de(db, partida.id))
+    return _resumen_partida(partida, _en_duelo_de(db, partida.id), _en_espera_de(db, partida.id))

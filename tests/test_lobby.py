@@ -3,12 +3,14 @@ Tests del lobby (C-17, spec `lobby`, D5).
 
 GET /api/lobby/partidas — listado público anti-cheat:
 - solo partidas `activo`, orden `creado_en` desc
-- payload exacto por ítem (codigo/tipo/cantidad_palabras/nombre/en_duelo), SIN
-  grilla/palabras/posicion/explicacion
+- payload exacto por ítem (codigo/tipo/cantidad_palabras/nombre/en_duelo/
+  en_espera), SIN grilla/palabras/posicion/explicacion
 - exclusión (autenticado): solo partidas con duelo activo propio (AMEND
   CAMBIO 3 — DD-07 reemplazado: el creador ya NO está excluido de su partida)
 - invitado ve todo
-- en_duelo true con fila activa, false sin fila; espera vencida → false
+- C-23 (D1): `en_duelo` = solo duelo formado (`emparejado`); `en_espera` =
+  solo espera de rival (`esperando`); libre = ambos false; espera vencida →
+  reciclada → ambos false; aditividad del campo nuevo
 - partida RE-JUGABLE tras el duelo (AMEND CAMBIO 4): el duelo no consume la
   partida — queda `activo`, vuelve al lobby, acepta nuevo duelo y jugadores
 - lista vacía → []
@@ -30,7 +32,7 @@ from app.models.partida import Partida
 # Helpers
 # ---------------------------------------------------------------------------
 
-CAMPOS_LOBBY = {"codigo", "tipo", "cantidad_palabras", "nombre", "en_duelo"}
+CAMPOS_LOBBY = {"codigo", "tipo", "cantidad_palabras", "nombre", "en_duelo", "en_espera"}
 
 
 def _registrar(client, prefijo="c17l"):
@@ -88,6 +90,15 @@ def _emparejamiento_row(db_sesion, codigo):
         .order_by(Emparejamiento.creado_en.desc())
         .first()
     )
+
+
+def _matchear_duelo(client_a, client_b, codigo):
+    """J_a crea la espera y J_b matchea → duelo `emparejado` (C-23, D1)."""
+    res = client_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+    assert res.status_code in (200, 201), res.text
+    res = client_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
+    assert res.status_code in (200, 201), res.text
+    assert res.json()["estado"] == "emparejado", res.text
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +250,39 @@ class TestExclusion:
 
 
 class TestEnDuelo:
-    def test_en_duelo_true_con_fila_activa(self, client, db_sesion):
-        """Partida con espera activa → en_duelo: true."""
+    def test_espera_ajena_no_bloquea_el_1v1(self, client, db_sesion):
+        """C-23 (repro PO 2026-09-20): una espera de rival (fila `esperando`) NO
+        es un duelo formado. J2 ve `en_duelo: false` + `en_espera: true` y puede
+        unirse al 1v1 (match contra la espera de J1)."""
+        c_creador, _ = _client_nuevo("ed0cr")
+        c_j1, _ = _client_nuevo("ed0j1")
+        c_j2, _ = _client_nuevo("ed0j2")
+        try:
+            codigo = _crear_y_activar(c_creador, "ed0cr", db_sesion)
+            # J1 elige la partida → crea la fila `esperando` (NO un duelo)
+            res = c_j1.post("/api/emparejamientos", json={"codigo_partida": codigo})
+            assert res.status_code in (200, 201), res.text
+            assert res.json()["estado"] == "esperando", res.text
+
+            # J2 la ve en el lobby: espera ajena ≠ duelo → 1v1 disponible
+            res = c_j2.get("/api/lobby/partidas")
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+            assert item["en_duelo"] is False
+            assert item["en_espera"] is True
+
+            # J2 se une al 1v1 → matchea contra la espera ajena de J1
+            res = c_j2.post("/api/emparejamientos", json={"codigo_partida": codigo})
+            assert res.status_code in (200, 201), res.text
+            assert res.json()["estado"] == "emparejado", res.text
+        finally:
+            c_creador.close()
+            c_j1.close()
+            c_j2.close()
+
+    def test_en_espera_true_con_fila_esperando(self, client, db_sesion):
+        """C-23 (4.1, redefine la semántica vieja): fila `esperando` →
+        `en_espera: true` y `en_duelo: false` — una espera de rival NO es un
+        duelo formado (antes `test_en_duelo_true_con_fila_activa`)."""
         c_creador, _ = _client_nuevo("ed1cr")
         c_a, _ = _client_nuevo("ed1a")
         c_ajeno, _ = _client_nuevo("ed1aj")
@@ -250,10 +292,32 @@ class TestEnDuelo:
 
             res = c_ajeno.get("/api/lobby/partidas")
             item = next(p for p in res.json() if p["codigo"] == codigo)
-            assert item["en_duelo"] is True
+            assert item["en_duelo"] is False
+            assert item["en_espera"] is True
         finally:
             c_creador.close()
             c_a.close()
+            c_ajeno.close()
+
+    def test_partida_emparejada_mantiene_en_duelo(self, client, db_sesion):
+        """C-23 (3.1): duelo FORMADO (`emparejado`) → `en_duelo: true` y
+        `en_espera: false` (el contrato previo de `en_duelo` sigue intacto)."""
+        c_creador, _ = _client_nuevo("ed4cr")
+        c_a, _ = _client_nuevo("ed4a")
+        c_b, _ = _client_nuevo("ed4b")
+        c_ajeno, _ = _client_nuevo("ed4aj")
+        try:
+            codigo = _crear_y_activar(c_creador, "ed4cr", db_sesion)
+            _matchear_duelo(c_a, c_b, codigo)
+
+            res = c_ajeno.get("/api/lobby/partidas")
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+            assert item["en_duelo"] is True
+            assert item["en_espera"] is False
+        finally:
+            c_creador.close()
+            c_a.close()
+            c_b.close()
             c_ajeno.close()
 
     def test_en_duelo_false_sin_fila(self, client, db_sesion):
@@ -267,8 +331,30 @@ class TestEnDuelo:
         finally:
             c_creador.close()
 
-    def test_espera_vencida_libera_en_duelo(self, client, db_sesion):
-        """Espera vencida (+60s) → se recicla y la partida viaja en_duelo: false."""
+    def test_partida_libre_sin_flags(self, client, db_sesion):
+        """C-23 (3.3): partida `activo` con solo fila `cancelado` → ambos flags
+        false y el 1v1 queda disponible."""
+        c_creador, _ = _client_nuevo("ed5cr")
+        c_a, _ = _client_nuevo("ed5a")
+        try:
+            codigo = _crear_y_activar(c_creador, "ed5cr", db_sesion)
+            # A crea la espera y la cancela → la fila queda `cancelado` (no activa)
+            res = c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+            assert res.status_code in (200, 201), res.text
+            res = c_a.delete("/api/emparejamientos")
+            assert res.status_code == 204, res.text
+
+            res = client.get("/api/lobby/partidas")
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+            assert item["en_duelo"] is False
+            assert item["en_espera"] is False
+        finally:
+            c_creador.close()
+            c_a.close()
+
+    def test_espera_vencida_libera_flags(self, client, db_sesion):
+        """C-23 (3.2): espera vencida (+60s) se recicla a `expirado` → ambos
+        flags false (el recurso no queda marcado para siempre)."""
         c_creador, _ = _client_nuevo("ed3cr")
         c_a, _ = _client_nuevo("ed3a")
         c_ajeno, _ = _client_nuevo("ed3aj")
@@ -284,10 +370,32 @@ class TestEnDuelo:
             res = c_ajeno.get("/api/lobby/partidas")
             item = next(p for p in res.json() if p["codigo"] == codigo)
             assert item["en_duelo"] is False
+            assert item["en_espera"] is False
         finally:
             c_creador.close()
             c_a.close()
             c_ajeno.close()
+
+    def test_schema_lobby_aditivo(self, client, db_sesion):
+        """C-23 (3.5/D4): `en_espera` es aditivo — un consumidor que lo ignora
+        sigue recibiendo los campos previos con tipo y valor intactos."""
+        c_creador, _ = _client_nuevo("ed6cr")
+        try:
+            codigo = _crear_y_activar(c_creador, "ed6cr", db_sesion)
+            res = client.get("/api/lobby/partidas")
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+
+            # El campo nuevo viaja...
+            assert item["en_espera"] is False
+            # ...y el contrato previo conserva tipo y valor
+            assert set(CAMPOS_LOBBY).issubset(item.keys())
+            assert isinstance(item["codigo"], str)
+            assert isinstance(item["tipo"], str)
+            assert isinstance(item["cantidad_palabras"], int)
+            assert item["nombre"] is None
+            assert item["en_duelo"] is False
+        finally:
+            c_creador.close()
 
 
 # ---------------------------------------------------------------------------

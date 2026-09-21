@@ -1,10 +1,11 @@
 """
-Tests del flag `en_duelo` en "Mis partidas" (C-17, D10, spec `lobby`).
+Tests de los flags `en_duelo`/`en_espera` en "Mis partidas" (C-17 D10 + C-23 D1).
 
-GET /api/partidas — `ResumenPartidaResponse` gana `en_duelo: bool`:
-- `true` cuando la partida del creador tiene emparejamiento activo
-  (`esperando|emparejado`)
-- `false` sin fila activa (campo presente en TODOS los ítems — aditivo)
+GET /api/partidas — `ResumenPartidaResponse` expone `en_duelo: bool` y
+`en_espera: bool` (aditivo):
+- C-23 (D1): `en_duelo` true SOLO con duelo formado (`emparejado`);
+  `en_espera` true SOLO con espera de rival pendiente (`esperando`)
+- `false` sin fila activa (campos presentes en TODOS los ítems — aditivos)
 
 PostgreSQL real (regla dura 4): helpers estilo test_emparejamientos.py.
 """
@@ -58,8 +59,9 @@ def _crear_y_activar(client, prefijo, db_sesion):
     return codigo
 
 
-def test_mis_partidas_con_duelo_true(client, db_sesion):
-    """Creador con partida en duelo activo → resumen en_duelo: true."""
+def test_mis_partidas_espera_en_espera_true(client, db_sesion):
+    """C-23 (4.1, redefine la semántica vieja): creador con partida que tiene
+    una espera de rival activa → `en_espera: true` y `en_duelo: false`."""
     c_creador, _ = _client_nuevo("md1cr")
     c_a, _ = _client_nuevo("md1a")
     try:
@@ -72,14 +74,41 @@ def test_mis_partidas_con_duelo_true(client, db_sesion):
         items = res.json()
         assert len(items) >= 1
         item = next(p for p in items if p["codigo"] == codigo)
-        assert item["en_duelo"] is True
+        assert item["en_duelo"] is False
+        assert item["en_espera"] is True
     finally:
         c_creador.close()
         c_a.close()
 
 
+def test_mis_partidas_duelo_formado_en_duelo_true(client, db_sesion):
+    """C-23 (3.1): creador con partida en duelo FORMADO (`emparejado`) →
+    `en_duelo: true` y `en_espera: false` (contrato previo intacto)."""
+    c_creador, _ = _client_nuevo("md4cr")
+    c_a, _ = _client_nuevo("md4a")
+    c_b, _ = _client_nuevo("md4b")
+    try:
+        codigo = _crear_y_activar(c_creador, "md4cr", db_sesion)
+        # A espera, B matchea → duelo formado
+        res = c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.status_code in (200, 201), res.text
+        res = c_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.status_code in (200, 201), res.text
+        assert res.json()["estado"] == "emparejado", res.text
+
+        res = c_creador.get("/api/partidas")
+        assert res.status_code == 200, res.text
+        item = next(p for p in res.json() if p["codigo"] == codigo)
+        assert item["en_duelo"] is True
+        assert item["en_espera"] is False
+    finally:
+        c_creador.close()
+        c_a.close()
+        c_b.close()
+
+
 def test_mis_partidas_sin_duelo_false(client, db_sesion):
-    """Creador sin emparejamiento → en_duelo: false (campo presente)."""
+    """Creador sin emparejamiento → en_duelo: false y en_espera: false."""
     c_creador, _ = _client_nuevo("md2cr")
     try:
         codigo = _crear_y_activar(c_creador, "md2cr", db_sesion)
@@ -88,10 +117,12 @@ def test_mis_partidas_sin_duelo_false(client, db_sesion):
         assert res.status_code == 200, res.text
         items = res.json()
         assert len(items) >= 1
-        # El campo debe estar en TODOS los ítems (no solo en el esperado)
+        # Los campos deben estar en TODOS los ítems (no solo en el esperado)
         for item in items:
             assert "en_duelo" in item, f"Falta en_duelo en {item['codigo']}"
+            assert "en_espera" in item, f"Falta en_espera en {item['codigo']}"
             assert item["en_duelo"] is False
+            assert item["en_espera"] is False
     finally:
         c_creador.close()
 

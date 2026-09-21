@@ -265,6 +265,9 @@ class ResumenPartidaResponse(BaseModel):
     palabras_encontradas: int
     nombre: Optional[str] = None  # C-15: nombre opcional asignado por el creador
     en_duelo: bool = False  # C-17 (D10): la partida tiene un duelo 1v1 activo
+    # C-23 (D4): aditivo — true SOLO si hay una espera de rival pendiente
+    # (`esperando`); default False = partida libre. Espejo del lobby.
+    en_espera: bool = False
 
 
 class ActualizarNombrePartidaRequest(BaseModel):
