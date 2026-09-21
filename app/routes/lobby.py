@@ -3,9 +3,10 @@ Rutas del lobby (C-17, D5) — listado público de partidas activas.
 
 GET /api/lobby/partidas (anti-cheat): solo `codigo`, `tipo`,
 `cantidad_palabras`, `nombre` y `en_duelo`. Accesible sin sesión; con sesión
-excluye las partidas del usuario (las que creó + las que tienen su duelo
-activo — DD-07 refinado). Las esperas vencidas se reciclan ANTES de calcular
-`en_duelo` (D4: `_reciclar_esperas_vencidas` se importa de emparejamientos).
+excluye solo las partidas con su duelo activo propio (AMEND CAMBIO 3 — DD-07
+reemplazado: el creador ya NO está excluido de su partida). Las esperas
+vencidas se reciclan ANTES de calcular `en_duelo` (D4:
+`_reciclar_esperas_vencidas` se importa de emparejamientos).
 """
 
 from fastapi import APIRouter, Depends
@@ -34,10 +35,11 @@ def listar_partidas_lobby(
 ):
     """Partidas `activo` ordenadas por `creado_en` desc (más reciente primero).
 
-    Exclusión si hay sesión (refinamiento DD-07): (a) partidas creadas por el
-    usuario y (b) partidas donde el usuario tiene emparejamiento activo
+    Exclusión si hay sesión (AMEND CAMBIO 3 — DD-07 reemplazado): solo
+    partidas donde el usuario tiene un duelo propio activo
     (`esperando|emparejado`) — el duelo es privado para sus protagonistas.
-    Invitado (sin sesión): ve TODO lo activo.
+    El creador YA ve su propia partida (puede jugar el 1v1). Invitado (sin
+    sesión): ve TODO lo activo.
 
     Anti-cheat: solo metadatos. `cantidad_palabras` = `len(partida.palabras)`
     es el único dato derivado (no filtra la solución).
@@ -65,8 +67,9 @@ def listar_partidas_lobby(
         }
 
         def _incluir(partida: Partida) -> bool:
-            if partida.creador_id == usuario.id:
-                return False
+            # DD-07 fue reemplazado por el AMEND c-19 (2026-09-19): el creador
+            # SÍ ve y puede jugar 1v1 su propia partida. Solo se excluyen
+            # partidas donde el usuario tiene un duelo propio VIVO.
             return partida.id not in codigos_con_duelo_propio
 
         partidas = [p for p in partidas if _incluir(p)]

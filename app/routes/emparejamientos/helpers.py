@@ -1,40 +1,30 @@
 """
-Rutas de emparejamientos 1v1 (C-17, D2-D8, D15).
+Helpers compartidos del emparejamiento 1v1 (C-17, D2-D8, D15).
 
-Match-or-wait con `SELECT ... FOR UPDATE` + índice UNIQUE parcial como red
-de seguridad y un único reintento ante carrera (409 final). Expiración lazy
-sin cron (D4): `_reciclar_esperas_vencidas` se llama en cada punto de lectura
-(POST, GET estado, GET lobby).
+La lógica de C-17 (match-or-wait, TTLs, expiración lazy, estado del duelo)
+vive acá; la lógica de CIERRE del duelo (C-19: conteo por jugador, corte,
+resultado) vive en `helpers_duelo.py` — autocontenido para no crear ciclos
+con este módulo (`_respuesta_estado` y los endpoints importan de ambos).
 
-Helpers compartidos (D2), reutilizados por `routes/lobby.py` y
-`routes/partidas/jugador.py` (auto-match en unirse):
-- `_reciclar_esperas_vencidas`
-- `_intentar_emparejar`
-- `_emparejamiento_activo_de`
+Reutilización externa: `routes/lobby.py`, `routes/partidas/crud.py` y
+`routes/partidas/jugador.py` importan desde `routes.emparejamientos` (el
+paquete re-exporta todo en `__init__.py`).
 """
 
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.auth import get_usuario_actual
-from app.database import get_db
 from app.models.emparejamiento import Emparejamiento, EmparejamientoEstado
 from app.models.partida import Partida
 from app.models.usuario import Usuario
-from app.routes.partidas.deps import _get_partida_o_404
-from app.schemas.emparejamiento import (
-    EmparejamientoCreateRequest,
-    EmparejamientoEstadoResponse,
-)
+from app.schemas.emparejamiento import DueloResultadoResponse, EmparejamientoEstadoResponse
 from app.schemas.lobby import PartidaLobbyResponse
-
-router = APIRouter(tags=["emparejamientos"])
 
 # TTLs (D4/D16): no configurables por .env — un change futuro (PA-03) puede
 # moverlos a settings si hace falta.
@@ -52,7 +42,7 @@ def _now_utc() -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# Helpers compartidos (D2)
+# Expiración lazy (D4/D15)
 # ---------------------------------------------------------------------------
 
 
@@ -235,111 +225,44 @@ def _rival_username(db: Session, fila: Emparejamiento, usuario: Usuario) -> Opti
 
 
 def _respuesta_estado(
-    db: Session, fila: Emparejamiento, usuario: Usuario
+    db: Session,
+    fila: Emparejamiento,
+    usuario: Usuario,
+    resultado: Optional[DueloResultadoResponse] = None,
 ) -> EmparejamientoEstadoResponse:
-    """Arma la respuesta del POST / estado con la fila dada."""
+    """Arma la respuesta del POST / estado con la fila dada.
+
+    `resultado` viaja pre-calculado por el endpoint (rama `finalizado`, D5):
+    helpers.py no importa `helpers_duelo` — así se evita el ciclo con
+    `_respuesta_estado`. El poll finalizado es ESTABLE (D6): el endpoint jamás
+    llama a esta función con una fila cancelada/expirada para consumirla.
+
+    AMEND CAMBIO 2: cuando el duelo está `emparejado`, los contadores
+    `yo_palabras`/`rival_palabras` se normalizan por requester (misma lógica
+    que `_rival_username`); en cualquier otro estado van en `null` (el
+    contador definitivo del `finalizado` viaja en `resultado`)."""
     partida = db.query(Partida).filter(Partida.id == fila.partida_id).first()
+
+    yo_palabras = rival_palabras = None
+    if fila.estado == EmparejamientoEstado.EMPAREJADO.value:
+        if fila.jugador1_id == usuario.id:
+            yo_palabras, rival_palabras = (
+                fila.jugador1_palabras,
+                fila.jugador2_palabras,
+            )
+        else:
+            yo_palabras, rival_palabras = (
+                fila.jugador2_palabras,
+                fila.jugador1_palabras,
+            )
+
     return EmparejamientoEstadoResponse(
         estado=fila.estado,
         partida=_partida_lobby(db, partida) if partida else None,
         rival=_rival_username(db, fila, usuario),
         creado_en=fila.creado_en,
         emparejado_en=fila.emparejado_en,
+        yo_palabras=yo_palabras,
+        rival_palabras=rival_palabras,
+        resultado=resultado,
     )
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.post("/emparejamientos", response_model=EmparejamientoEstadoResponse)
-def crear_emparejamiento(
-    req: EmparejamientoCreateRequest,
-    response: Response,
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_actual),
-):
-    """Match-or-wait (D6): crea la espera o matchea a un rival que ya espera.
-
-    - 404: la partida no existe (patrón `_get_partida_o_404`).
-    - 400: la partida no está `activo`.
-    - 403: el solicitante es el creador (DD-07): no juega 1v1 sus partidas.
-    - 201: espera creada o match realizado.
-    - 200: ya estaba esperando en esta partida (idempotente).
-    """
-    partida = _get_partida_o_404(db, req.codigo_partida)
-
-    if partida.estado != "activo":
-        raise HTTPException(
-            status_code=400,
-            detail="La partida todavía no está activa",
-        )
-    if partida.creador_id == usuario.id:
-        raise HTTPException(
-            status_code=403,
-            detail="No podés jugar 1v1 contra tu propia partida",
-        )
-
-    ya_esperando = _emparejamiento_activo_de(db, usuario.id, partida.id)
-    if ya_esperando is not None and ya_esperando.jugador1_id == usuario.id:
-        # Idempotencia: el usuario ya es jugador1 de la espera de esta partida.
-        response.status_code = 200
-        return _respuesta_estado(db, ya_esperando, usuario)
-
-    fila = _intentar_emparejar(db, partida, usuario)
-    response.status_code = 201
-    return _respuesta_estado(db, fila, usuario)
-
-
-@router.get("/emparejamientos/estado", response_model=EmparejamientoEstadoResponse)
-def obtener_estado(
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_actual),
-):
-    """Polling del estado del emparejamiento (D7).
-
-    - Fila activa (esperando|emparejado) → estado con partida (+ rival si match).
-    - Última transición no activa (cancelado|expirado) sin reportar →
-      se devuelve UNA vez (marca `finalizado_en` como consumida).
-    - Sin fila (o transición ya consumida) → `estado: null`.
-    """
-    _reciclar_esperas_vencidas(db)
-
-    fila = _ultima_fila_de(db, usuario.id)
-    if fila is None:
-        return EmparejamientoEstadoResponse(estado=None)
-
-    if fila.estado in ESTADOS_ACTIVOS:
-        return _respuesta_estado(db, fila, usuario)
-
-    # Transición cancelado/expirado: se reporta una sola vez.
-    if fila.finalizado_en is not None:
-        return EmparejamientoEstadoResponse(estado=None)
-
-    fila.finalizado_en = _now_utc()  # marca "consumida" sin borrar historial
-    db.commit()
-    return EmparejamientoEstadoResponse(estado=fila.estado)
-
-
-@router.delete("/emparejamientos", status_code=204)
-def cancelar_emparejamiento(
-    db: Session = Depends(get_db),
-    usuario: Usuario = Depends(get_usuario_actual),
-):
-    """Cancela la espera del usuario (D8): solo su propia fila `esperando`.
-
-    - `esperando` → `cancelado`, 204 (el poll reporta `cancelado` una vez).
-    - `emparejado` → 400 "El duelo ya comenzó" (nadie puede cancelar el duelo).
-    - Sin fila activa → 204 idempotente (y un jugador2 nunca está `esperando`).
-    """
-    fila = _emparejamiento_activo_de(db, usuario.id)
-    if fila is None:
-        return
-
-    if fila.estado == EmparejamientoEstado.EMPAREJADO.value:
-        raise HTTPException(status_code=400, detail="El duelo ya comenzó")
-
-    if fila.jugador1_id == usuario.id:
-        fila.estado = EmparejamientoEstado.CANCELADO.value
-        db.commit()

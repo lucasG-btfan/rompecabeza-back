@@ -3,6 +3,8 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional, Literal
 
+from app.schemas.emparejamiento import DueloResultadoResponse
+
 
 class PalabraCreate(BaseModel):
     palabra: str = Field(..., min_length=1, max_length=50)
@@ -247,6 +249,9 @@ class RespuestaRequest(BaseModel):
 class EncontradaResponse(BaseModel):
     encontrada: bool
     posicion: Optional[dict] = None
+    # C-19 (D5): si la jugada corta el duelo (o encuentra la fila finalizada
+    # por una carrera), viaja el resultado normalizado; si no, null (aditivo).
+    duelo_finalizado: Optional[DueloResultadoResponse] = None
 
 
 class ResumenPartidaResponse(BaseModel):

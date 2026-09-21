@@ -26,6 +26,7 @@ from app.routes.partidas.deps import (
 )
 from app.routes.emparejamientos import (
     _emparejamiento_activo_de,
+    _incrementar_hallazgo_duelo,
     _intentar_emparejar,
     _now_utc,
 )
@@ -85,11 +86,6 @@ def unirse_partida(
             db.commit()
         return UnirseResponse(modo="registrado", emparejado=True)
 
-    # El creador nunca se auto-empareja en su propia partida (DD-07): si
-    # alguien está esperando ahí, el duelo es para un tercero.
-    if partida.creador_id == usuario.id:
-        return UnirseResponse(modo="registrado")
-
     # Auto-match (D9): match-only sobre la espera de OTRO jugador; jamás se
     # crea una espera acá (el solitario no cambia el contrato C-14).
     fila = _intentar_emparejar(db, partida, usuario, crear_espera=False)
@@ -111,12 +107,17 @@ def marcar_encontrada(
     palabra_id: uuid.UUID,
     req: EncontradaRequest,
     db: Session = Depends(get_db),
+    usuario: Optional[Usuario] = Depends(get_usuario_opcional),
 ):
     """
     Valida la selección del jugador (celda inicial y final) contra la posición
     real de la palabra y, si coincide (en cualquiera de los dos sentidos),
     responde 200 con la posición SIN persistir nada (C-14): el progreso es
     efímero y vive en la sesión del frontend, para registrado o invitado.
+
+    C-19 (D3): post-validación, si el usuario está en un duelo `emparejado`
+    con `iniciado_en`, incrementa su contador — y si la SUMA llega al total
+    de palabras, corta el duelo y adjunta `duelo_finalizado` (D5).
     """
     partida = _get_partida_o_404(db, codigo)
     palabra = _get_palabra_o_404(db, partida, palabra_id)
@@ -149,7 +150,12 @@ def marcar_encontrada(
     if not (seleccion_directa or seleccion_invertida):
         raise HTTPException(status_code=400, detail="Selección incorrecta")
 
-    return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
+    duelo = _incrementar_hallazgo_duelo(db, partida, usuario)
+    return EncontradaResponse(
+        encontrada=True,
+        posicion=palabra.posicion,
+        duelo_finalizado=duelo,
+    )
 
 
 @router.put(
@@ -161,6 +167,7 @@ def responder_palabra(
     palabra_id: uuid.UUID,
     req: RespuestaRequest,
     db: Session = Depends(get_db),
+    usuario: Optional[Usuario] = Depends(get_usuario_opcional),
 ):
     """
     Validación de respuesta por palabra para CRUCIGRAMAS (C-10, D1):
@@ -200,4 +207,10 @@ def responder_palabra(
             detail="Las letras no coinciden con la palabra del crucigrama",
         )
 
-    return EncontradaResponse(encontrada=True, posicion=palabra.posicion)
+    # C-19 (D3/D5): misma rama aditiva que `marcar_encontrada`.
+    duelo = _incrementar_hallazgo_duelo(db, partida, usuario)
+    return EncontradaResponse(
+        encontrada=True,
+        posicion=palabra.posicion,
+        duelo_finalizado=duelo,
+    )

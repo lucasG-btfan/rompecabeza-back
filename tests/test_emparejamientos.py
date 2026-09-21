@@ -119,17 +119,39 @@ class TestPostEmparejamiento:
             c_creador.close()
             c_req.close()
 
-    def test_403_creador_no_empareja(self, client, db_sesion):
-        """El creador recibe 403 (DD-07)."""
+    def test_creador_puede_crear_espera_en_su_partida(self, client, db_sesion):
+        """AMEND CAMBIO 3 (reemplaza DD-07): el creador SÍ puede participar
+        del 1v1 en su propia partida — crea su espera normalmente (201)."""
         c_creador, _ = _client_nuevo("ep3cr")
         try:
             codigo = _crear_y_activar(c_creador, "ep3cr", db_sesion)
             res = c_creador.post(
                 "/api/emparejamientos", json={"codigo_partida": codigo}
             )
-            assert res.status_code == 403
+            assert res.status_code == 201
+            assert res.json()["estado"] == "esperando"
         finally:
             c_creador.close()
+
+    def test_creador_y_otro_forman_duelo(self, client, db_sesion):
+        """AMEND CAMBIO 3 end-to-end: la espera del creador es matcheable por
+        otro jugador → duelo `emparejado` con el creador como jugador."""
+        c_creador, _ = _client_nuevo("ep3bcr")
+        c_b, _ = _client_nuevo("ep3bb")
+        try:
+            codigo = _crear_y_activar(c_creador, "ep3bcr", db_sesion)
+            res = c_creador.post(
+                "/api/emparejamientos", json={"codigo_partida": codigo}
+            )
+            assert res.status_code == 201
+            res = c_b.post(
+                "/api/emparejamientos", json={"codigo_partida": codigo}
+            )
+            assert res.status_code == 201
+            assert res.json()["estado"] == "emparejado"
+        finally:
+            c_creador.close()
+            c_b.close()
 
     def test_primer_jugador_esperando(self, client, db_sesion):
         """Primer jugador crea espera: 201 con estado esperando."""

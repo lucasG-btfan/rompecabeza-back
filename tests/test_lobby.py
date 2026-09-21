@@ -5,9 +5,12 @@ GET /api/lobby/partidas — listado público anti-cheat:
 - solo partidas `activo`, orden `creado_en` desc
 - payload exacto por ítem (codigo/tipo/cantidad_palabras/nombre/en_duelo), SIN
   grilla/palabras/posicion/explicacion
-- exclusión (autenticado): partidas propias + partidas con duelo activo propio
+- exclusión (autenticado): solo partidas con duelo activo propio (AMEND
+  CAMBIO 3 — DD-07 reemplazado: el creador ya NO está excluido de su partida)
 - invitado ve todo
 - en_duelo true con fila activa, false sin fila; espera vencida → false
+- partida RE-JUGABLE tras el duelo (AMEND CAMBIO 4): el duelo no consume la
+  partida — queda `activo`, vuelve al lobby, acepta nuevo duelo y jugadores
 - lista vacía → []
 
 PostgreSQL real (regla dura 4): helpers estilo test_emparejamientos.py.
@@ -171,23 +174,24 @@ class TestListadoLobby:
 
 
 # ---------------------------------------------------------------------------
-# Exclusión de partidas propias (autenticado) — DD-07
+# Exclusión por duelo activo propio (AMEND CAMBIO 3 — DD-07 reemplazado)
 # ---------------------------------------------------------------------------
 
 
 class TestExclusion:
-    def test_creador_no_ve_su_partida(self, client, db_sesion):
-        """El creador autenticado NO ve su partida en el lobby."""
+    def test_creador_ve_su_partida(self, client, db_sesion):
+        """AMEND CAMBIO 3: el creador autenticado SÍ ve su propia partida en el
+        lobby (ya puede participar del 1v1). La ajena también la ve."""
         c_creador, _ = _client_nuevo("ex1cr")
         c_ajeno, _ = _client_nuevo("ex1aj")
         try:
             codigo_propia = _crear_y_activar(c_creador, "ex1cr", db_sesion)
             codigo_ajena = _crear_y_activar(c_ajeno, "ex1aj", db_sesion, la_palabra="LUNA")
 
-            # El creador ve solo la ajena
+            # El creador ve AMBAS: la propia y la ajena
             res = c_creador.get("/api/lobby/partidas")
             codigos = [p["codigo"] for p in res.json()]
-            assert codigo_propia not in codigos
+            assert codigo_propia in codigos
             assert codigo_ajena in codigos
         finally:
             c_creador.close()
@@ -284,3 +288,95 @@ class TestEnDuelo:
             c_creador.close()
             c_a.close()
             c_ajeno.close()
+
+
+# ---------------------------------------------------------------------------
+# Partida re-jugable tras el duelo (AMEND CAMBIO 4 — spec `lobby`)
+# ---------------------------------------------------------------------------
+
+
+class TestPartidaRejugablePostDuelo:
+    """El duelo 1v1 ya NO consume la partida (AMEND CAMBIO 4): terminado el
+    duelo (por abandono D4), la partida queda `activo` — reaparece en el
+    lobby sin badge, 'Mis partidas' la muestra activa y acepta un nuevo
+    duelo y jugadores."""
+
+    def _setup_duelo_finalizado(self, db_sesion, c_creador, c_a, c_b):
+        """Partida activa cuyo duelo terminó por abandono (D4) — sigue `activo`
+        gracias a CAMBIO 4."""
+        codigo = _crear_y_activar(c_creador, "lf", db_sesion)
+        res = c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.status_code in (200, 201), res.text
+        res = c_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.status_code in (200, 201), res.text
+        assert res.json()["estado"] == "emparejado", res.text
+        res = c_b.post(f"/api/partidas/{codigo}/unirse")
+        assert res.status_code == 200, res.text
+        res = c_b.post(
+            "/api/emparejamientos/abandonar", json={"codigo_partida": codigo}
+        )
+        assert res.status_code == 200, res.text
+        return codigo
+
+    def test_partida_vuelve_al_lobby_tras_el_duelo(self, client, db_sesion):
+        """CAMBIO 4: la partida cuyo duelo terminó sigue `activo` → aparece en
+        el lobby (disponible para nuevos jugadores)."""
+        c_creador, _ = _client_nuevo("lf1cr")
+        c_a, _ = _client_nuevo("lf1a")
+        c_b, _ = _client_nuevo("lf1b")
+        c_ajeno, _ = _client_nuevo("lf1aj")
+        try:
+            codigo = self._setup_duelo_finalizado(db_sesion, c_creador, c_a, c_b)
+
+            res = c_ajeno.get("/api/lobby/partidas")
+            codigos = [p["codigo"] for p in res.json()]
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+            assert item["en_duelo"] is False  # sin badge
+            assert codigo in codigos
+        finally:
+            c_creador.close()
+            c_a.close()
+            c_b.close()
+            c_ajeno.close()
+
+    def test_mis_partidas_activa_sin_badge_post_duelo(self, client, db_sesion):
+        """CAMBIO 4: 'Mis partidas' (GET /partidas) muestra la partida tras el
+        duelo como `estado: "activo"` y `en_duelo: false` (re-jugable)."""
+        c_creador, _ = _client_nuevo("lf2cr")
+        c_a, _ = _client_nuevo("lf2a")
+        c_b, _ = _client_nuevo("lf2b")
+        try:
+            codigo = self._setup_duelo_finalizado(db_sesion, c_creador, c_a, c_b)
+
+            res = c_creador.get("/api/partidas")
+            assert res.status_code == 200, res.text
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+            assert item["estado"] == "activo"
+            assert item["en_duelo"] is False
+        finally:
+            c_creador.close()
+            c_a.close()
+            c_b.close()
+
+    def test_partida_acepta_nuevo_duelo_y_unirse_post_duelo(self, client, db_sesion):
+        """CAMBIO 4: tras el duelo la partida acepta de nuevo POST
+        /emparejamientos (espera 201) y /unirse (registrado 200)."""
+        c_creador, _ = _client_nuevo("lf3cr")
+        c_a, _ = _client_nuevo("lf3a")
+        c_b, _ = _client_nuevo("lf3b")
+        c_nuevo, _ = _client_nuevo("lf3n")
+        try:
+            codigo = self._setup_duelo_finalizado(db_sesion, c_creador, c_a, c_b)
+
+            res = c_nuevo.post("/api/emparejamientos", json={"codigo_partida": codigo})
+            assert res.status_code == 201, res.text
+            assert res.json()["estado"] == "esperando"
+
+            res = c_nuevo.post(f"/api/partidas/{codigo}/unirse")
+            assert res.status_code == 200, res.text
+            assert res.json().get("emparejado") is False  # registrado, sin duelo
+        finally:
+            c_creador.close()
+            c_a.close()
+            c_b.close()
+            c_nuevo.close()

@@ -5,7 +5,8 @@ POST /api/partidas/{codigo}/unirse — contrato C-14 ampliado:
 - registrado (no creador) + fila `esperando` de otro → `{modo: "registrado",
   emparejado: true}` y la fila pasa a `emparejado`
 - invitado → `{modo: "invitado", emparejado: false}` y la fila NO cambia
-- creador → `emparejado: false` y la fila NO cambia (DD-07)
+- creador → emparejado: true con espera de otro (AMEND CAMBIO 3 — DD-07
+  reemplazado: el creador SÍ participa del 1v1 en su propia partida)
 - sin espera → `emparejado: false` (solitario)
 - self-match evitado: `jugador1` se une a su propia espera → `emparejado: false`
 - primer `unirse` de cualquiera sobre duelo `emparejado` → setea `iniciado_en`
@@ -138,24 +139,27 @@ def test_invitado_nunca_empareja(client, db_sesion):
         c_a.close()
 
 
-def test_creador_no_se_autoempareja(client, db_sesion):
-    """Creador se une a su partida con espera → emparejado: false, fila intacta."""
+def test_creador_si_se_autoempareja(client, db_sesion):
+    """AMEND CAMBIO 3: el creador se une a SU partida que tiene espera de otro
+    (c_a) → auto-match SÍ se produce: `emparejado: true`, la fila pasa a
+    `emparejado` y el creador queda como jugador2."""
     c_creador, _ = _client_nuevo("am3cr")
     c_a, _ = _client_nuevo("am3a")
     try:
         codigo = _crear_y_activar(c_creador, "am3cr", db_sesion)
         c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
 
-        # El creador se une a SU propia partida
+        # El creador se une a SU propia partida (ya no está excluido, DD-07)
         res = c_creador.post(f"/api/partidas/{codigo}/unirse")
         assert res.status_code == 200, res.text
         body = res.json()
         assert body["modo"] == "registrado"
-        assert body["emparejado"] is False
+        assert body["emparejado"] is True
 
         fila = _fila_de(db_sesion, codigo)
-        assert fila.estado == "esperando"
-        assert fila.jugador2_id is None
+        assert fila.estado == "emparejado"
+        assert fila.jugador2_id is not None
+        assert fila.emparejado_en is not None
     finally:
         c_creador.close()
         c_a.close()

@@ -20,12 +20,52 @@ class EmparejamientoCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AbandonarRequest(BaseModel):
+    """Abandono (forfeit) del duelo 1v1 (C-19, D4). Solo identifica la partida;
+    quien abandona es el usuario de la sesión (`get_usuario_actual`)."""
+
+    codigo_partida: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class EmparejamientoEstadoResponse(BaseModel):
     """Estado del emparejamiento del usuario logueado, o la última transición
-    relevante para su flujo (`cancelado`/`expirado` se reportan una vez)."""
+    relevante para su flujo (`cancelado`/`expirado` se reportan una vez).
+    `finalizado` es ESTABLE (D6): trae `resultado` y nunca se consume.
 
-    estado: Optional[Literal["esperando", "emparejado", "cancelado", "expirado"]] = None
+    AMEND CAMBIO 2: `yo_palabras`/`rival_palabras` (solo si `emparejado`)
+    normalizados por requester — el contador visible "[jugador1] n/m
+    [jugador2] n/m" sin revelar quién es quién."""
+
+    estado: Optional[
+        Literal["esperando", "emparejado", "cancelado", "expirado", "finalizado"]
+    ] = None
     partida: Optional[PartidaLobbyResponse] = None
     rival: Optional[str] = None  # username del otro jugador (solo si emparejado)
     creado_en: Optional[datetime] = None
     emparejado_en: Optional[datetime] = None
+    yo_palabras: Optional[int] = None  # contador propio (solo si emparejado)
+    rival_palabras: Optional[int] = None  # contador del rival (solo si emparejado)
+    resultado: Optional["DueloResultadoResponse"] = None  # solo si finalizado
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DueloResultadoResponse(BaseModel):
+    """Resultado del duelo 1v1 normalizado por requester (C-19, D5).
+
+    `yo_palabras`/`rival_palabras` son relativos a quien consulta; `gane`
+    es True/False para él, o `None` cuando el duelo terminó en empate.
+    `tiempo_total_seg` = `iniciado_en → finalizado_en` (D14: el mismo reloj
+    para ambos; un abandono antes del arranque da 0).
+    """
+
+    yo_palabras: int
+    rival_palabras: int
+    gane: Optional[bool] = None
+    rival: Optional[str] = None  # username del otro jugador
+    tiempo_total_seg: int = 0
+    finalizado_en: Optional[datetime] = None
+
+    model_config = ConfigDict(extra="forbid")

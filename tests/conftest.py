@@ -16,6 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import get_settings
 from app.database import Base, get_db
 from app.main import app
+from app.models.emparejamiento import _migrar_emparejamientos
 
 TEST_DB_NAME = "rompecabezas_test"
 
@@ -52,6 +53,9 @@ def db_engine():
 
     engine = create_engine(url_test, pool_pre_ping=True)
     Base.metadata.create_all(bind=engine)
+    # C-19: create_all no altera tablas existentes; la migración agrega las
+    # columnas de conteo del duelo cuando la base ya existía del cambio C-17.
+    _migrar_emparejamientos(engine)
     yield engine
     Base.metadata.drop_all(bind=engine)
     engine.dispose()
