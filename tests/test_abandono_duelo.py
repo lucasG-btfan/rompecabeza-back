@@ -98,7 +98,10 @@ def test_j2_abandona_y_j1_gana_por_forfait(client, db_sesion):
     """J2 abandona el duelo emparejado → 200 con resultado normalizado para
     J2 (perdió), `ganador_id = J1` y fila `finalizado`. La partida NO se
     consume (AMEND CAMBIO 4): queda `activo` y re-jugable.
-    `tiempo_total_seg` valida la duración real (iniciado 120 s atrás, D14)."""
+    `tiempo_total_seg` valida la duración real (iniciado 120 s atrás, D14).
+    C-25: el abandonador lleva MÁS palabras que el ganador por forfeit
+    (RN-EM-07 — se gana con menos); el resultado trae `motivo: "abandono"`
+    para ambos (quien abandona `gane: false`, el rival `gane: true`)."""
     c_creador, _ = _client_nuevo("f1cr")
     c_a, username_a = _client_nuevo("f1a")
     c_b, _ = _client_nuevo("f1b")
@@ -108,14 +111,20 @@ def test_j2_abandona_y_j1_gana_por_forfait(client, db_sesion):
 
         fila = _fila_de(db_sesion, codigo)
         fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=120)
+        # C-25 (RN-EM-07): el abandonador J2 va ganando el conteo (1 palabra)
+        # frente al rival J1 (0) — el forfeit le da la victoria al que tiene
+        # MENOS. Ambos bajo el total (2): la fila sigue `emparejado`.
+        fila.jugador1_palabras = 0
+        fila.jugador2_palabras = 1
         db_sesion.commit()
 
         res = _abandonar(c_b, codigo)
         assert res.status_code == 200, res.text
         body = res.json()
-        assert body["yo_palabras"] == 0
+        assert body["yo_palabras"] == 1  # el abandonador tenía MÁS palabras
         assert body["rival_palabras"] == 0
         assert body["gane"] is False
+        assert body["motivo"] == "abandono"  # C-25: forfeit, no corte
         assert body["rival"] == username_a
         assert body["tiempo_total_seg"] >= 120
         assert body["finalizado_en"] is not None
@@ -127,6 +136,16 @@ def test_j2_abandona_y_j1_gana_por_forfait(client, db_sesion):
 
         partida = db_sesion.query(Partida).filter(Partida.codigo == codigo).one()
         assert partida.estado == "activo"  # CAMBIO 4: no se consume
+
+        # C-25: el GANADOR por forfeit (con menos palabras) ve su poll con
+        # `gane: true` y el MISMO motivo "abandono".
+        poll = c_a.get("/api/emparejamientos/estado")
+        assert poll.status_code == 200, poll.text
+        resultado = poll.json()["resultado"]
+        assert resultado["gane"] is True
+        assert resultado["motivo"] == "abandono"
+        assert resultado["yo_palabras"] == 0  # normalización del ganador
+        assert resultado["rival_palabras"] == 1
     finally:
         c_creador.close()
         c_a.close()

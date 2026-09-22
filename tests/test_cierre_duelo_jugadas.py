@@ -379,6 +379,7 @@ def test_suma_supera_total_sin_completar_no_corta_y_gana_el_que_completa(
         assert duelo["yo_palabras"] == 12
         assert duelo["rival_palabras"] == 7
         assert duelo["gane"] is True
+        assert duelo["motivo"] == "corte"  # C-25: ganó por completar el total
         assert duelo["rival"] == username_a  # normalizado: el rival es J1
         assert duelo["tiempo_total_seg"] >= 0
         assert duelo["finalizado_en"] is not None
@@ -411,6 +412,7 @@ def test_empate_teorico_finalizar_ganador_null(client, db_sesion):
         assert fila.finalizado_en is not None
 
         assert duelo.gane is None
+        assert duelo.motivo == "empate"  # C-25: ganador_id None → empate
         assert duelo.yo_palabras == 0
         assert duelo.rival_palabras == 0
 

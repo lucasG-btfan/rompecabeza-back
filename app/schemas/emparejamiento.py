@@ -59,11 +59,17 @@ class DueloResultadoResponse(BaseModel):
     es True/False para él, o `None` cuando el duelo terminó en empate.
     `tiempo_total_seg` = `iniciado_en → finalizado_en` (D14: el mismo reloj
     para ambos; un abandono antes del arranque da 0).
+    `motivo` (C-25, D2) explica el POR QUÉ del resultado: `corte` (ganó el
+    primero que completó `len(palabras)`, el copy del C-19 era honesto para
+    este caso), `abandono` (forfeit del rival — quien gana por forfait puede
+    tener MENOS palabras, RN-EM-07) o `empate`. Requerido (D4): el frontend
+    abre el copy por `(gane, motivo)`.
     """
 
     yo_palabras: int
     rival_palabras: int
     gane: Optional[bool] = None
+    motivo: Literal["corte", "abandono", "empate"]
     rival: Optional[str] = None  # username del otro jugador
     tiempo_total_seg: int = 0
     finalizado_en: Optional[datetime] = None

@@ -20,6 +20,11 @@ C-22 (fix duelo fantasma): el branch de carrera del lock (`if fila is None`)
 distingue una carrera REAL (el rival finalizó hace SEGUNDOS) de un duelo
 VIEJO de una partida re-jugada (finalizado hace más de `VENTANA_CARRERA_LOCK_SEG`
 = 60 s): el viejo NO se adjunta a jugadas en solitario (contrato C-14).
+C-25 (motivo): `_resultado_duelo` DERIVA (sin columnas nuevas, D1) el `motivo`
+del resultado por la fila del duelo (D2): `ganador_id None` → `empate`;
+`contador_del_ganador == len(partida.palabras)` → `corte`; sino → `abandono`
+(forfeit — el ganador por forfait puede tener MENOS palabras, RN-EM-07).
+Carga la partida (1 PK lookup, D3) SOLO cuando hay ganador.
 """
 
 import uuid
@@ -65,7 +70,12 @@ def _resultado_duelo(
 ) -> Optional[DueloResultadoResponse]:
     """Payload del resultado DEL DUELO normalizado por requester (D5):
     `yo`/`rival` dependen de quién consulta. Solo jugadores del duelo reciben
-    resultado; `gane` es None en empate."""
+    resultado; `gane` es None en empate.
+    `motivo` (C-25, D1/D2) se DERIVA de la fila — sin columnas nuevas:
+    `ganador_id` None → `empate`; contador del ganador == `len(palabras)` →
+    `corte`; sino → `abandono` (RN-EM-07: el forfait lo gana quien completa
+    el total aunque el rival lleve MÁS palabras). La partida se carga (1 PK
+    lookup, D3) solo cuando hay ganador."""
     if fila is None or not _usuario_es_jugador_del_duelo(fila, usuario):
         return None
 
@@ -79,8 +89,18 @@ def _resultado_duelo(
     rival = db.query(Usuario).filter(Usuario.id == rival_id).first()
 
     gane = None
+    motivo = "empate"
     if fila.ganador_id is not None:
         gane = fila.ganador_id == usuario.id
+        partida = db.get(Partida, fila.partida_id)
+        contador_del_ganador = (
+            fila.jugador1_palabras
+            if fila.jugador1_id == fila.ganador_id
+            else fila.jugador2_palabras
+        )
+        motivo = (
+            "corte" if contador_del_ganador == len(partida.palabras) else "abandono"
+        )
 
     tiempo_total_seg = 0
     if fila.iniciado_en is not None and fila.finalizado_en is not None:
@@ -92,6 +112,7 @@ def _resultado_duelo(
         yo_palabras=yo_palabras,
         rival_palabras=rival_palabras,
         gane=gane,
+        motivo=motivo,
         rival=rival.username if rival else None,
         tiempo_total_seg=tiempo_total_seg,
         finalizado_en=fila.finalizado_en,
