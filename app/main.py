@@ -34,8 +34,6 @@ app.include_router(lobby.router, prefix="/api")
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
-    # C-19: create_all no altera tablas ya creadas; la migración idempotente
-    # agrega las columnas de conteo por jugador del duelo 1v1.
     _migrar_emparejamientos(engine)
 
 

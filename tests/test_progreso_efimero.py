@@ -1,20 +1,3 @@
-"""
-Contrato de progreso EFÍMERO (C-14): el backend deja de persistir progreso
-de juego para TODOS los roles (registrado o invitado), en sopa y crucigrama.
-
-- `marcar_encontrada` / `responder_palabra` validan y responden 200 con
-  `{encontrada: true, posicion}` SIN crear participación de jugador ni
-  hallazgos (D2).
-- `unirse_partida` responde el `modo` sin crear participación ni devolver
-  `iniciado_en` (D1/D3).
-- `obtener_estado` devuelve siempre `encontrada: false` / `posicion: null`
-  y la grilla del crucigrama con todas las letras ocultas (D4/D5).
-
-PostgreSQL real (regla dura): mismos fixtures y estilo que
-`test_crucigrama_juego.py`. La grilla del ejemplo PATO/ORO/AS usa el layout
-manual determinista de C-09 (ver docstring de test_crucigrama_juego.py).
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient
@@ -130,8 +113,6 @@ def _respuesta(client, codigo, palabra_id, letras):
 
 
 def test_marcar_sopa_registrado_no_persiste(client, db_sesion):
-    """Marcar CASA con la selección correcta como registrado: 200 + posicion,
-    sin participación de jugador ni filas en `hallazgos` (C-14)."""
     codigo = _sopa_casa_sol(client)
     casa = _palabra_id(client, codigo, "CASA")
     _registrar(client, prefijo="c14b")  # jugador B
@@ -192,8 +173,6 @@ def test_marcar_sopa_campo_extra_422(client):
 
 
 def test_responder_crucigrama_registrado_no_persiste(client, db_sesion):
-    """Responder PATO y ORO como registrado: 200 sin participación de jugador
-    ni hallazgos (C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     oro = _palabra_id(client, codigo, "ORO")
@@ -212,9 +191,6 @@ def test_responder_crucigrama_registrado_no_persiste(client, db_sesion):
 
 
 def test_estado_siempre_vacio_tras_jugar(client):
-    """Tras responder correctamente, GET /estado sigue vacío: todas las
-    palabras con `encontrada: false` / `posicion: null` y la grilla del
-    crucigrama con todas las letras `null` (C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     _registrar(client, prefijo="c14d")
@@ -238,8 +214,6 @@ def test_estado_siempre_vacio_tras_jugar(client):
 
 
 def test_unirse_no_crea_participacion(client, db_sesion):
-    """POST /unirse como registrado: 200 `{modo: "registrado"}` sin
-    `iniciado_en` en el body y sin fila de participación de jugador (C-14)."""
     codigo = _crucigrama_pato(client)
     _registrar(client, prefijo="c14e")  # jugador B
 

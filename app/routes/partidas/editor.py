@@ -73,19 +73,7 @@ def posicionar_palabra(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Posiciona manualmente una palabra en la grilla (override del creador). Solo el creador.
-
-    - `sopa`: valida contra las 8 direcciones y rechaza coordenadas negativas
-      (comportamiento histórico intacto; la relajación de `ge=0` es SOLO
-      crucigrama).
-    - `crucigrama` (C-09): exige estado 'creando' y orientación H/V, y corre la
-      díada de validación del editor (cruce con letra coincidente anti-paralela,
-      anti-fantasma; SIN conectividad obligatoria — opción C, REVISIÓN 9.x).
-      Acepta coordenadas negativas (D1 REVISADO: la palabra se extiende hacia
-      arriba/izquierda; `construir_grilla` traslada al bbox mínimo en finalizar).
-      Persiste `{fila, columna, orientacion}` SIN `numero` (la numeración se
-      asigna en `finalizar`, cuando el layout está completo).
-    """
+    
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
     palabra = _get_palabra_o_404(db, partida, palabra_id)
@@ -125,9 +113,6 @@ def posicionar_palabra(
         except EditorCrucigramaError as e:
             raise HTTPException(status_code=400, detail=str(e))
     elif req.fila < 0 or req.columna < 0:
-        # REVISIÓN 9.x (D1): la relajación de `ge=0` aplica SOLO a crucigrama.
-        # La sopa no tiene otra cota de límites: validación explícita acá para
-        # preservar el comportamiento previo (antes lo hacía el schema con 422).
         raise HTTPException(
             status_code=400,
             detail="las coordenadas deben ser no negativas",
@@ -155,10 +140,6 @@ def quitar_posicion_palabra(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Quita la posición manual de una palabra del editor (C-11, BUG 2 QA):
-    vuelve a `posicion: null` para reposicionarla o dejar que `finalizar` la
-    genere automáticamente. Mismas guardas que el PUT posicion: solo el
-    creador y, para crucigrama, solo en estado 'creando'."""
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
     palabra = _get_palabra_o_404(db, partida, palabra_id)
@@ -181,14 +162,7 @@ def obtener_editor_partida(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Estado del editor manual del crucigrama (C-09), SOLO para el creador.
-
-    A diferencia del GET público y del /estado (que ocultan `posicion` por
-    anti-cheat), aquí la posición es SIEMPRE visible: el creador está armando
-    el layout y necesita ver dónde quedó cada palabra (null si todavía no la
-    posicionó). No expone `grilla` (no existe pre-finalizar; el editor la
-    deriva de las posiciones).
-    """
+   
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
 
@@ -208,7 +182,7 @@ def obtener_editor_partida(
         tipo=partida.tipo,
         estado=partida.estado,
         palabras=palabras,
-        nombre=partida.nombre,  # C-15: nombre opcional asignado por el creador
+        nombre=partida.nombre,  
     )
 
 
@@ -277,7 +251,6 @@ def finalizar_partida(
                 ),
             )
 
-        # C-09: layout manual vs generación automática (todas o ninguna).
         posicionadas = [p for p in partida.palabras if p.posicion]
         if posicionadas and len(posicionadas) != len(partida.palabras):
             raise HTTPException(
@@ -363,12 +336,7 @@ def editar_letra(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """
-    Permite al creador editar manualmente una letra de la grilla ya generada.
-    Solo el creador, y SOLO si todavía nadie encontró ninguna palabra: una vez
-    que el puntaje de algún jugador empezó a depender de la grilla, se congela
-    para no invalidar resultados ya generados.
-    """
+    
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
 

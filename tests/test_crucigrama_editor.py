@@ -1,24 +1,3 @@
-"""
-Tests unitarios del servicio `crucigrama_editor` (lógica pura, sin DB).
-
-Mismo estilo que `test_crucigrama_generator.py`: listados de palabras
-colocadas en memoria. Cubren la díada de validación del posicionamiento
-manual (cabida de cruce -> anti-fantasma) y el builder de layout manual
-(`construir_layout`).
-
-Nota sobre el espejo servidor: `validar_posicion` compone las primitivas de
-`crucigrama_generator.py` (`cabe_palabra`, `check_fantasma`), que son la
-fuente de verdad única (D7 de C-08).
-
-REVISIÓN 9.x (decisión post-QA, opción C): se eliminó la conectividad
-obligatoria (D4 REVISADO) y se aceptan coordenadas negativas. Los casos que
-antes exigían cruce/desconexión (2.7 y 2.9 originales) se INVIERTEN: la
-palabra posterior sin cruce es aceptada, la movida que desconecta es
-aceptada, el layout desconectado en `construir_layout` ya NO lanza, y se
-agregó el caso de coordenadas negativas (fila -2) con el escenario real del
-PO (ESPEJO + ARENA).
-"""
-
 import pytest
 
 from app.services.crucigrama_editor import (

@@ -1,19 +1,3 @@
-"""
-Tests del nombre opcional en la creación de partidas (C-16):
-`POST /api/partidas` con `nombre` (spec `crear-partida`, R6).
-
-Contrato:
-- Crear con `nombre` → 201 con nombre en la respuesta y persistido (GET público).
-- Crear sin `nombre` → 201 con nombre null (se persiste null).
-- Trim de espacios alrededor del nombre.
-- `""` / whitespace → se normaliza a null (no se persiste string vacío).
-- 50 chars → 201; 51 chars → 422 (max_length=50).
-- Campo no declarado en el body → 422 (extra='forbid', regla dura 5).
-
-PostgreSQL real (regla dura 4): mismos fixtures y estilo que
-`test_renombrar_partida.py`. Sin mocks de base de datos.
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient
@@ -143,12 +127,6 @@ def test_campo_extra_rechazado(client):
 
 
 def test_mis_partidas_incluye_nombre(client):
-    """C-16: 'Mis partidas' (GET /partidas) devuelve el nombre persistido.
-
-    C-15 dejó el campo `nombre` en `ResumenPartidaResponse` pero la
-    construcción del resumen no lo seteaba: sin esto el front mostraría el
-    código en vez del nombre creado (QA 7.7 de C-16).
-    """
     creada = _crear_partida(client, _body_minimo(nombre="Tema Navidad"))
 
     res_lista = client.get("/api/partidas")

@@ -1,13 +1,3 @@
-"""
-Tests de los endpoints de emparejamientos (C-17, D2-D8, D15).
-
-Cubre los 3 endpoints (POST match-or-wait, GET estado, DELETE cancelar),
-lazy expiry de espera (60 s), duelo emparejado sin arranque (D15, 10 min),
-idempotencia, carrera, anti-cheat y consumición de cancelado/expirado.
-
-PostgreSQL real (regla dura 4): helpers estilo test_crear_partida_nombre.py.
-"""
-
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -550,13 +540,16 @@ class TestDueloSinArranque:
             res = c_a.get("/api/emparejamientos/estado")
             assert res.status_code == 200
             assert res.json()["estado"] == "expirado"
+
+            res = c_b.get("/api/emparejamientos/estado")
+            assert res.status_code == 200
+            assert res.json()["estado"] == "expirado"
         finally:
             c_creador.close()
             c_a.close()
             c_b.close()
 
-    def test_emparejado_con_iniciado_en_no_expira(self, client, db_sesion):
-        """Duelo emparejado con iniciado_en seteado → NO expira aunque pase 10 min."""
+    def test_emparejado_con_iniciado_en_reciente_no_expira(self, client, db_sesion):
         c_creador, _ = _client_nuevo("d16cr")
         c_a, _ = _client_nuevo("d16a")
         c_b, _ = _client_nuevo("d16b")
@@ -565,16 +558,71 @@ class TestDueloSinArranque:
             c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
             c_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
 
-            # Setear emparejado_en + iniciado_en en el pasado
+            # Emparejado_en viejo + iniciado_en RECIENTE (30 min): la rama D15
+            # no aplica (iniciado_en seteado) y el TTL de vida tampoco (30 < 60).
             fila = _emparejamiento_row(db_sesion, codigo)
             fila.emparejado_en = datetime.now(timezone.utc) - timedelta(seconds=601)
-            fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=600)
+            fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=1800)
             db_sesion.commit()
 
-            # Poll de A → sigue emparejado (iniciado_en protege)
+            # Poll de A → sigue emparejado (reciente no expira)
             res = c_a.get("/api/emparejamientos/estado")
             assert res.status_code == 200
             assert res.json()["estado"] == "emparejado"
+
+            # Triangulación: al vencer la vida (61 min) la MISMA fila expira
+            fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=3661)
+            db_sesion.commit()
+
+            res = c_a.get("/api/emparejamientos/estado")
+            assert res.status_code == 200
+            assert res.json()["estado"] == "expirado"
+        finally:
+            c_creador.close()
+            c_a.close()
+            c_b.close()
+
+
+# ===========================================================================
+# 20 / PA-07: TTL de VIDA del duelo iniciado (opción (b), D1/D3) — 60 min
+# ===========================================================================
+
+
+class TestDueloVidaTTL:
+    def test_duelo_iniciado_vencido_expira_estable_para_ambos(self, client, db_sesion):
+
+        c_creador, _ = _client_nuevo("c20cr")
+        c_a, _ = _client_nuevo("c20a")
+        c_b, _ = _client_nuevo("c20b")
+        try:
+            codigo = _crear_y_activar(c_creador, "c20cr", db_sesion)
+            c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+            c_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
+
+            # Vida agotada: iniciado_en hace 61 min (emparejado_en queda fresco —
+            # la rama D15 exige iniciado_en IS NULL y no aplica acá).
+            fila = _emparejamiento_row(db_sesion, codigo)
+            fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=3661)
+            db_sesion.commit()
+
+            # Poll de A → expirado
+            res = c_a.get("/api/emparejamientos/estado")
+            assert res.status_code == 200
+            assert res.json()["estado"] == "expirado"
+
+            # Poll de B (el RIVAL) → expirado TAMBIÉN (antes: null → latch
+            # nunca disparaba; este es el escenario del QA del PO)
+            res = c_b.get("/api/emparejamientos/estado")
+            assert res.status_code == 200
+            assert res.json()["estado"] == "expirado"
+
+            # Estable: lecturas siguientes de AMBOS siguen devolviendo expirado
+            res = c_a.get("/api/emparejamientos/estado")
+            assert res.status_code == 200
+            assert res.json()["estado"] == "expirado"
+            res = c_b.get("/api/emparejamientos/estado")
+            assert res.status_code == 200
+            assert res.json()["estado"] == "expirado"
         finally:
             c_creador.close()
             c_a.close()

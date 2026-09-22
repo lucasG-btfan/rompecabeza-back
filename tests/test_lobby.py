@@ -1,23 +1,3 @@
-"""
-Tests del lobby (C-17, spec `lobby`, D5).
-
-GET /api/lobby/partidas — listado público anti-cheat:
-- solo partidas `activo`, orden `creado_en` desc
-- payload exacto por ítem (codigo/tipo/cantidad_palabras/nombre/en_duelo/
-  en_espera), SIN grilla/palabras/posicion/explicacion
-- exclusión (autenticado): solo partidas con duelo activo propio (AMEND
-  CAMBIO 3 — DD-07 reemplazado: el creador ya NO está excluido de su partida)
-- invitado ve todo
-- C-23 (D1): `en_duelo` = solo duelo formado (`emparejado`); `en_espera` =
-  solo espera de rival (`esperando`); libre = ambos false; espera vencida →
-  reciclada → ambos false; aditividad del campo nuevo
-- partida RE-JUGABLE tras el duelo (AMEND CAMBIO 4): el duelo no consume la
-  partida — queda `activo`, vuelve al lobby, acepta nuevo duelo y jugadores
-- lista vacía → []
-
-PostgreSQL real (regla dura 4): helpers estilo test_emparejamientos.py.
-"""
-
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -93,7 +73,6 @@ def _emparejamiento_row(db_sesion, codigo):
 
 
 def _matchear_duelo(client_a, client_b, codigo):
-    """J_a crea la espera y J_b matchea → duelo `emparejado` (C-23, D1)."""
     res = client_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
     assert res.status_code in (200, 201), res.text
     res = client_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
@@ -251,9 +230,6 @@ class TestExclusion:
 
 class TestEnDuelo:
     def test_espera_ajena_no_bloquea_el_1v1(self, client, db_sesion):
-        """C-23 (repro PO 2026-09-20): una espera de rival (fila `esperando`) NO
-        es un duelo formado. J2 ve `en_duelo: false` + `en_espera: true` y puede
-        unirse al 1v1 (match contra la espera de J1)."""
         c_creador, _ = _client_nuevo("ed0cr")
         c_j1, _ = _client_nuevo("ed0j1")
         c_j2, _ = _client_nuevo("ed0j2")
@@ -280,9 +256,6 @@ class TestEnDuelo:
             c_j2.close()
 
     def test_en_espera_true_con_fila_esperando(self, client, db_sesion):
-        """C-23 (4.1, redefine la semántica vieja): fila `esperando` →
-        `en_espera: true` y `en_duelo: false` — una espera de rival NO es un
-        duelo formado (antes `test_en_duelo_true_con_fila_activa`)."""
         c_creador, _ = _client_nuevo("ed1cr")
         c_a, _ = _client_nuevo("ed1a")
         c_ajeno, _ = _client_nuevo("ed1aj")
@@ -300,7 +273,7 @@ class TestEnDuelo:
             c_ajeno.close()
 
     def test_partida_emparejada_mantiene_en_duelo(self, client, db_sesion):
-        """C-23 (3.1): duelo FORMADO (`emparejado`) → `en_duelo: true` y
+        """23 (3.1): duelo FORMADO (`emparejado`) → `en_duelo: true` y
         `en_espera: false` (el contrato previo de `en_duelo` sigue intacto)."""
         c_creador, _ = _client_nuevo("ed4cr")
         c_a, _ = _client_nuevo("ed4a")
@@ -332,8 +305,6 @@ class TestEnDuelo:
             c_creador.close()
 
     def test_partida_libre_sin_flags(self, client, db_sesion):
-        """C-23 (3.3): partida `activo` con solo fila `cancelado` → ambos flags
-        false y el 1v1 queda disponible."""
         c_creador, _ = _client_nuevo("ed5cr")
         c_a, _ = _client_nuevo("ed5a")
         try:
@@ -353,8 +324,6 @@ class TestEnDuelo:
             c_a.close()
 
     def test_espera_vencida_libera_flags(self, client, db_sesion):
-        """C-23 (3.2): espera vencida (+60s) se recicla a `expirado` → ambos
-        flags false (el recurso no queda marcado para siempre)."""
         c_creador, _ = _client_nuevo("ed3cr")
         c_a, _ = _client_nuevo("ed3a")
         c_ajeno, _ = _client_nuevo("ed3aj")
@@ -376,9 +345,32 @@ class TestEnDuelo:
             c_a.close()
             c_ajeno.close()
 
+    def test_duelo_vencido_ttl_libera_flags(self, client, db_sesion):
+        c_creador, _ = _client_nuevo("ttlcr")
+        c_a, _ = _client_nuevo("ttla")
+        c_b, _ = _client_nuevo("ttlb")
+        c_ajeno, _ = _client_nuevo("ttlaj")
+        try:
+            codigo = _crear_y_activar(c_creador, "ttlcr", db_sesion)
+            _matchear_duelo(c_a, c_b, codigo)
+
+            # Vida agotada: iniciado_en hace 61 min (la partida quedó marcada
+            # en_duelo hasta que un punto de lectura recicle la fila)
+            fila = _emparejamiento_row(db_sesion, codigo)
+            fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=3661)
+            db_sesion.commit()
+
+            res = c_ajeno.get("/api/lobby/partidas")
+            item = next(p for p in res.json() if p["codigo"] == codigo)
+            assert item["en_duelo"] is False
+            assert item["en_espera"] is False
+        finally:
+            c_creador.close()
+            c_a.close()
+            c_b.close()
+            c_ajeno.close()
+
     def test_schema_lobby_aditivo(self, client, db_sesion):
-        """C-23 (3.5/D4): `en_espera` es aditivo — un consumidor que lo ignora
-        sigue recibiendo los campos previos con tipo y valor intactos."""
         c_creador, _ = _client_nuevo("ed6cr")
         try:
             codigo = _crear_y_activar(c_creador, "ed6cr", db_sesion)

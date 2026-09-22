@@ -1,19 +1,3 @@
-"""
-Tests del auto-match al unirse por código (C-17, D9/D15, spec `emparejamientos`).
-
-POST /api/partidas/{codigo}/unirse — contrato C-14 ampliado:
-- registrado (no creador) + fila `esperando` de otro → `{modo: "registrado",
-  emparejado: true}` y la fila pasa a `emparejado`
-- invitado → `{modo: "invitado", emparejado: false}` y la fila NO cambia
-- creador → emparejado: true con espera de otro (AMEND CAMBIO 3 — DD-07
-  reemplazado: el creador SÍ participa del 1v1 en su propia partida)
-- sin espera → `emparejado: false` (solitario)
-- self-match evitado: `jugador1` se une a su propia espera → `emparejado: false`
-- primer `unirse` de cualquiera sobre duelo `emparejado` → setea `iniciado_en`
-
-PostgreSQL real (regla dura 4): helpers estilo test_emparejamientos.py.
-"""
-
 import uuid
 from datetime import datetime, timezone
 

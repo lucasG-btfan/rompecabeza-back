@@ -1,14 +1,3 @@
-"""
-Modelo `Emparejamiento` (C-17, D1) — duelo 1v1 entre dos usuarios sobre una
-partida del lobby.
-
-Restricciones de integridad (spec `emparejamientos`):
-- Índice UNIQUE parcial `uq_emparejamiento_partida_activo`: a lo sumo UNA
-  fila activa (`esperando` o `emparejado`) por partida.
-- Índice UNIQUE parcial `uq_emparejamiento_jugador1_esperando`: un usuario
-  espera a lo sumo en UNA partida (estado `esperando`).
-"""
-
 import enum
 import uuid
 from datetime import datetime, timezone
@@ -54,15 +43,9 @@ class Emparejamiento(Base):
     ganador_id = Column(
         UUID(as_uuid=True), ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True
     )
-    # Conteo de palabras resueltas por cada jugador dentro del duelo (C-19).
-    # AMEND feedback PO (2026-09-19, CAMBIO 1): el corte se dispara cuando el
-    # contador PROPIO de un jugador llega al total de palabras de la partida
-    # (gana ESE jugador); `ganador_id` NULL = empate teórico. La partida NO se
-    # consume (CAMBIO 4): queda activa y re-jugable.
     jugador1_palabras = Column(Integer, default=0, nullable=False)
     jugador2_palabras = Column(Integer, default=0, nullable=False)
 
-    # A lo sumo una fila activa (esperando|emparejado) por partida.
     __table_args__ = (
         Index(
             "uq_emparejamiento_partida_activo",
@@ -70,7 +53,6 @@ class Emparejamiento(Base):
             unique=True,
             postgresql_where=text("estado IN ('esperando', 'emparejado')"),
         ),
-        # Un usuario espera a lo sumo en una partida.
         Index(
             "uq_emparejamiento_jugador1_esperando",
             "jugador1_id",
@@ -81,12 +63,6 @@ class Emparejamiento(Base):
 
 
 def _migrar_emparejamientos(engine):
-    """Migración idempotente del duelo 1v1 (C-19).
-
-    `create_all` NO altera tablas ya existentes, así que las bases creadas
-    antes de C-19 (dev/prod) obtienen acá las columnas de conteo por jugador.
-    `ADD COLUMN IF NOT EXISTS` hace que correrla siempre sea seguro.
-    """
     with engine.begin() as conn:
         conn.execute(
             text(

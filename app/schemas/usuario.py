@@ -23,5 +23,5 @@ class UsuarioResponse(BaseModel):
 
 
 class UnirseResponse(BaseModel):
-    modo: str  # "registrado" | "invitado" — el cronómetro es 100% frontend (C-14)
-    emparejado: bool = False  # C-17 (D9): true si el unirse disparó auto-match 1v1
+    modo: str  
+    emparejado: bool = False  

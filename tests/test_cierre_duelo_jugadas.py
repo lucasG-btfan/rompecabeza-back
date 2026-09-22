@@ -1,29 +1,3 @@
-"""
-Cierre del duelo 1v1 en las JUGADAS (C-19, D2/D3/D5/D7 — spec `emparejamientos`).
-
-Requisitos "Conteo de palabras por jugador del duelo" y "Fin del duelo por
-última palabra" (AMEND feedback PO 2026-09-19 — CAMBIO 1):
-
-- hallazgo válido de J1 en `/encontrada` (sopa) -> `jugador1_palabras` +1
-- respuesta válida de J2 en `/respuesta` (crucigrama) -> `jugador2_palabras` +1
-  (el MISMO helper `_incrementar_hallazgo_duelo` en ambos endpoints, D3)
-- solitario e invitado nunca incrementan (contrato C-14, D3)
-- corte por COMPLETAR INDIVIDUAL (AMEND CAMBIO 1): cuando el contador PROPIO
-  de un jugador llega a `len(partida.palabras)`, el duelo pasa a `finalizado`
-  y gana ESE jugador (el que completó, no el de mayoría). La jugada que corta
-  adjunta `duelo_finalizado` (D5, normalizado por requester). El empate
-  (`ganador_id NULL`) es CASO TEÓRICO (lo cubre el test del helper). La
-  partida NO se consume (AMEND CAMBIO 4): queda `activo` y se re-juega.
-- hallazgo posterior al corte (carrera por lock): no incrementa y adjunta el
-  resultado — el test simula el estado transitorio (fila `finalizado` con la
-  partida todavía `activo`), porque una jugada sobre partida ya finalizada
-  recibe 400 antes de llegar al código del duelo
-- bordes (triangulación): duelo de OTRO usuario no incrementa; duelo
-  `emparejado` sin `iniciado_en` no incrementa; suma que supera el total sin
-  que nadie complete no corta; total 1 -> primer hallazgo corta
-
-PostgreSQL real (regla dura 4): fixtures `client`/`db_sesion` de conftest.
-"""
 
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -94,8 +68,6 @@ def _posicionar(client, codigo, palabra_id, fila, columna, orientacion):
 
 
 def _crucigrama_pato(client):
-    """Partida crucigrama PATO/ORO/AS con layout manual determinista (C-09):
-    crear → posicionar (editor) → finalizar/publicar."""
     res = client.post(
         "/api/partidas",
         json={
@@ -216,8 +188,6 @@ def test_respuesta_crucigrama_de_j2_incrementa_contador(client, db_sesion):
         codigo = _crucigrama_pato(c_creador)
         _duelo_emparejado(c_creador, c_a, c_b, codigo)
 
-        # El GET público oculta palabras a no-creadores (C-12): el id de PATO
-        # lo obtiene el CREADOR; J2 solo responde con las letras.
         pato_id = _palabra_id(c_creador, codigo, "PATO")
         res = _responder_con(c_b, codigo, pato_id, "PATO")
         assert res.status_code == 200, res.text
@@ -233,8 +203,6 @@ def test_respuesta_crucigrama_de_j2_incrementa_contador(client, db_sesion):
 
 
 def test_solitario_no_incrementa(client, db_sesion):
-    """Registrado jugando SIN duelo (contrato C-14): 200 sin duelo_finalizado
-    y no se crea ninguna fila de emparejamiento."""
     c_creador, _ = _client_nuevo("s3cr")
     c_jugador, _ = _client_nuevo("s3j")
     try:
@@ -334,6 +302,41 @@ def test_duelo_emparejado_sin_iniciar_no_incrementa(client, db_sesion):
         c_b.close()
 
 
+def test_hallazgo_sobre_duelo_expirado_no_incrementa(client, db_sesion):
+    c_creador, _ = _client_nuevo("s7cr")
+    c_a, _ = _client_nuevo("s7a")
+    c_b, _ = _client_nuevo("s7b")
+    try:
+        codigo = _crear_y_publicar(c_creador, "sopa", PALABRAS_12)
+        res = c_a.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.status_code in (200, 201), res.text
+        res = c_b.post("/api/emparejamientos", json={"codigo_partida": codigo})
+        assert res.json()["estado"] == "emparejado"
+        res = c_b.post(f"/api/partidas/{codigo}/unirse")
+        assert res.status_code == 200, res.text
+
+        # Vida agotada: iniciado_en hace 61 min → la fila expira (lazy).
+        fila = _fila_de(db_sesion, codigo)
+        fila.iniciado_en = datetime.now(timezone.utc) - timedelta(seconds=3661)
+        db_sesion.commit()
+        res = c_a.get("/api/emparejamientos/estado")
+        assert res.json()["estado"] == "expirado"
+
+        seleccion = _seleccion_sopa(db_sesion, codigo, "CASA")
+        res = _marcar(c_a, codigo, "CASA", seleccion)
+        assert res.status_code == 200, res.text
+        assert res.json().get("duelo_finalizado") is None
+
+        db_sesion.refresh(fila)
+        assert fila.estado == "expirado"
+        assert fila.jugador1_palabras == 0
+        assert fila.jugador2_palabras == 0
+    finally:
+        c_creador.close()
+        c_a.close()
+        c_b.close()
+
+
 # ---------------------------------------------------------------------------
 # Corte por completar individual (AMEND CAMBIO 1/CAMBIO 4 — feedback PO)
 # ---------------------------------------------------------------------------
@@ -379,7 +382,7 @@ def test_suma_supera_total_sin_completar_no_corta_y_gana_el_que_completa(
         assert duelo["yo_palabras"] == 12
         assert duelo["rival_palabras"] == 7
         assert duelo["gane"] is True
-        assert duelo["motivo"] == "corte"  # C-25: ganó por completar el total
+        assert duelo["motivo"] == "corte"  
         assert duelo["rival"] == username_a  # normalizado: el rival es J1
         assert duelo["tiempo_total_seg"] >= 0
         assert duelo["finalizado_en"] is not None
@@ -412,7 +415,7 @@ def test_empate_teorico_finalizar_ganador_null(client, db_sesion):
         assert fila.finalizado_en is not None
 
         assert duelo.gane is None
-        assert duelo.motivo == "empate"  # C-25: ganador_id None → empate
+        assert duelo.motivo == "empate" 
         assert duelo.yo_palabras == 0
         assert duelo.rival_palabras == 0
 
@@ -501,19 +504,7 @@ def test_corte_con_total_una_palabra(client, db_sesion):
         c_b.close()
 
 
-# ---------------------------------------------------------------------------
-# C-22 — fix duelo fantasma: un duelo VIEJO (fuera de la ventana de carrera)
-# NO se adjunta a jugadas en solitario/re-jugadas (contrato C-14)
-# ---------------------------------------------------------------------------
-
-
 def test_duelo_viejo_finalizado_no_se_adjunta_a_solitario(client, db_sesion):
-    """Duelo 1v1 finalizado hace HORAS (fuera de `VENTANA_CARRERA_LOCK_SEG`)
-    y partida re-jugable (AMEND CAMBIO 4, queda `activo`): un ex-jugador del
-    duelo marca una palabra VÁLIDA en solitario → 200 con `duelo_finalizado:
-    null` (el resultado del duelo viejo NO se adjunta — contrato C-14) y los
-    contadores 10/2 intactos. Reproduce el reporte del PO 2026-09-20 (partida
-    QKL3K7: Lucas 10 vs test2 2, ganó test2)."""
     c_creador, _ = _client_nuevo("c5cr")
     c_a, _ = _client_nuevo("c5a")  # "Lucas" (ex-jugador J1 del duelo viejo)
     c_b, _ = _client_nuevo("c5b")  # "test2" (J2, ganó el duelo viejo)
@@ -686,7 +677,6 @@ def test_sin_fila_finalizada_no_se_adjunta(client, db_sesion):
         assert res.status_code == 200, res.text
         assert res.json().get("duelo_finalizado") is None
 
-        # La fila histórica no se toca (solitario no incrementa, C-14).
         db_sesion.refresh(fila)
         assert fila.estado == "cancelado"
         assert fila.jugador1_palabras == 0

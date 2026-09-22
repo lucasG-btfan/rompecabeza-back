@@ -1,20 +1,3 @@
-"""
-Servicio del editor manual de crucigramas (C-09).
-
-Compone las primitivas puras de `crucigrama_generator.py` (`cabe_palabra`,
-`check_fantasma`, `construir_grilla`) para validar posicionamientos manuales
-ortogonales y construir la grilla final desde un layout manual completo. Un
-solo punto de la verdad para la validación cruz/anti-fantasma (D7 de C-08) —
-el editor no redefine las reglas, las reutiliza.
-
-REVISIÓN 9.x (decisión post-QA, opción C): se ELIMINÓ la conectividad
-obligatoria (D4 REVISADO). `validar_posicion` valida solo cabida de cruce +
-anti-fantasma; una palabra puede quedar como componente separado y el orden
-de inserción es irrelevante. `construir_layout` acepta layouts desconectados.
-La relajación aplica solo al modo manual: `generar_crucigrama` (automático,
-C-08) conserva su conectividad estricta.
-"""
-
 from app.services.crucigrama_generator import (
     DELTAS,
     ORIENTACIONES_CRUCE,

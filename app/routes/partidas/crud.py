@@ -35,7 +35,6 @@ router = APIRouter(tags=["partidas"])
 
 
 def generar_codigo(db: Session) -> str:
-    """Genera un codigo unico de 6 caracteres."""
     while True:
         codigo = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
         existing = db.query(Partida).filter(Partida.codigo == codigo).first()
@@ -44,10 +43,7 @@ def generar_codigo(db: Session) -> str:
 
 
 def _en_duelo_de(db: Session, partida_id: uuid.UUID) -> bool:
-    """C-17 (D10) + C-23 (D1): la partida tiene un duelo 1v1 FORMADO
-    (`emparejado`). Una espera de rival (`esperando`) ya no cuenta como duelo
-    — se reporta con `_en_espera_de`.
-    """
+   
     return (
         db.query(Emparejamiento.id)
         .filter(
@@ -60,11 +56,7 @@ def _en_duelo_de(db: Session, partida_id: uuid.UUID) -> bool:
 
 
 def _en_espera_de(db: Session, partida_id: uuid.UUID) -> bool:
-    """C-23 (D1): la partida tiene una espera de rival pendiente (`esperando`).
-
-    Se computa post-reciclaje lazy (`_reciclar_esperas_vencidas`), paridad con
-    el lobby.
-    """
+    
     return (
         db.query(Emparejamiento.id)
         .filter(
@@ -79,7 +71,6 @@ def _en_espera_de(db: Session, partida_id: uuid.UUID) -> bool:
 def _resumen_partida(
     partida: Partida, en_duelo: bool = False, en_espera: bool = False
 ) -> ResumenPartidaResponse:
-    """Resumen de una partida para 'Mis partidas' y el PATCH de nombre (C-15/C-16)."""
     palabras = partida.palabras
     return ResumenPartidaResponse(
         id=partida.id,
@@ -100,10 +91,7 @@ def listar_mis_partidas(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """
-    Lista las partidas que el usuario logueado creó (participación con rol='creador'),
-    ordenadas de más reciente a más antigua. Útil para la pantalla 'Mis partidas'.
-    """
+   
     participaciones = (
         db.query(Participacion)
         .filter(
@@ -114,8 +102,6 @@ def listar_mis_partidas(
         .all()
     )
 
-    # D4: punto de lectura del duelo → reciclar esperas vencidas antes de
-    # computar `en_duelo` (paridad con el lobby).
     _reciclar_esperas_vencidas(db)
 
     resultado = []
@@ -137,7 +123,6 @@ def crear_partida(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Crear una partida requiere estar logueado (necesitamos creador_id para ownership)."""
     codigo = generar_codigo(db)
 
     partida = Partida(
@@ -147,7 +132,7 @@ def crear_partida(
         config=req.config or {},
         estado="creando",
         creador_id=usuario.id,
-        nombre=req.nombre,  # C-16 (D10): ya normalizado por el validador (None o trim)
+        nombre=req.nombre,  
     )
     db.add(partida)
     db.flush()  
@@ -163,8 +148,6 @@ def crear_partida(
         )
         db.add(palabra)
 
-    # El creador también queda como participación (rol='creador'), útil si
-    # después quiere jugar su propia partida o si querés listar "mis partidas".
     participacion = Participacion(
         id=uuid.uuid4(),
         partida_id=partida.id,
@@ -181,7 +164,7 @@ def crear_partida(
         codigo=partida.codigo,
         tipo=partida.tipo,
         estado=partida.estado,
-        nombre=partida.nombre,  # C-16 (D11): nombre persistido en la creación
+        nombre=partida.nombre, 
     )
 
 
@@ -191,23 +174,8 @@ def obtener_partida(
     db: Session = Depends(get_db),
     usuario: Optional[Usuario] = Depends(get_usuario_opcional),
 ):
-    """
-    Vista pública de la partida. NO expone `posicion` de palabras todavía no
-    encontradas (ver hallazgo de seguridad: antes este endpoint sí las filtraba).
-    Accesible sin login: cualquiera con el código puede ver/jugar (soporta invitados).
-
-    C-12 (D1): en un crucigrama la solución (`palabra`/`texto_mostrar`) solo se
-    expone al creador autenticado — el editor (C-09) la necesita para mostrarla.
-    Cualquier otro rol (jugador registrado distinto o invitado anónimo) la recibe
-    `None`: la pista (`explicacion`) sigue siendo pública y la `posicion` de
-    palabras encontradas respeta la regla previa. La sopa no filtra nada.
-
-    C-12 (D1 REVISADO): `es_creador` viaja en la respuesta para que el front
-    gatee la pantalla del editor sin necesidad de otro endpoint.
-    """
+    
     partida = _get_partida_o_404(db, codigo)
-    # `_es_creador` asume un usuario autenticado (accede a `usuario.id`);
-    # sin sesión no puede ser creador, nunca crashea.
     es_creador = usuario is not None and _es_creador(partida, usuario)
     ocultar_solucion = partida.tipo == "crucigrama" and not es_creador
 
@@ -232,7 +200,7 @@ def obtener_partida(
         config=partida.config,
         creado_en=partida.creado_en,
         es_creador=es_creador,
-        nombre=partida.nombre,  # C-16: el GET público refleja el nombre persistido
+        nombre=partida.nombre,  
     )
 
 
@@ -243,7 +211,7 @@ def agregar_palabras(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Agrega más palabras a una partida que todavía está en estado 'creando'. Solo el creador."""
+    
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
 
@@ -293,12 +261,7 @@ def actualizar_nombre_partida(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_actual),
 ):
-    """Asigna/modifica/limpia el nombre de una partida (C-15). Solo el creador.
-
-    El body llega normalizado por `ActualizarNombrePartidaRequest` (trim +
-    vacío/whitespace → None, max 50, `extra='forbid'`). La respuesta es el
-    resumen completo, paridad con 'Mis partidas'.
-    """
+   
     partida = _get_partida_o_404(db, codigo)
     _requerir_creador(partida, usuario)
 

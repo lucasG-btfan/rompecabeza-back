@@ -1,19 +1,3 @@
-"""
-Tests del renombrado de partidas (C-15): `PATCH /api/partidas/{codigo}/nombre`.
-
-Contrato (spec `partida-nombre`):
-- El creador autenticado puede asignar, modificar o limpiar el nombre de su partida.
-- String vacío o whitespace → se normaliza a null (limpia el nombre).
-- El nombre se trimea de espacios al guardar.
-- max 50 caracteres → 422; campo extra → 422 (extra='forbid').
-- Sin sesión → 401; no-creador → 403; partida inexistente → 404;
-  partida con creador_id NULL → 403 (no hay propietario).
-- La respuesta es `ResumenPartidaResponse` completo (incluye nombre y progreso).
-
-PostgreSQL real (regla dura 4): mismos fixtures y estilo que
-`test_vista_publica.py`. Sin mocks de base de datos.
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient

@@ -1,19 +1,3 @@
-"""
-Tests de configuración (pydantic-settings, sin DB — la config es pura).
-
-Contrato del change C-11 deploy (design D1/D7):
-- `ALLOWED_ORIGINS` (JSON) se parsea a lista y es alias del campo `cors_origins`
-  (Render usa el nombre documentado en la KB; el `.env` local usa `CORS_ORIGINS`).
-- Sin env vars → defaults de desarrollo intactos (localhost:5173/3000,
-  `cookie_secure=False`, `cookie_samesite="lax"`, `debug=True`).
-- `COOKIE_SAMESITE` / `COOKIE_SECURE` / `DEBUG` configurables por env.
-- `ALLOWED_ORIGINS` mal formado → fail-fast en el arranque (spec: «la configuración
-  falla en el arranque en lugar de dejar CORS abierto o vacío»).
-
-Los tests son herméticos: apuntan `_env_file` a un archivo inexistente para no
-depender del `.env` real del desarrollador.
-"""
-
 import os
 from unittest.mock import patch
 

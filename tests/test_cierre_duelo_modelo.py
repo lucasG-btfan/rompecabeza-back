@@ -1,20 +1,3 @@
-"""
-Modelo `Emparejamiento` para el cierre del duelo (C-19, D1/D3/D15).
-
-Escenarios del spec `emparejamientos` que esta suite fija a nivel MODELO:
-- `estado = "finalizado"` NO es un estado "activo": una fila finalizada y una
-  fila nueva `esperando`/`emparejado` de la MISMA partida conviven sin violar
-  el índice UNIQUE parcial `uq_emparejamiento_partida_activo`.
-- `jugador1_palabras` / `jugador2_palabras` nacen en 0 y son `NOT NULL` a
-  nivel de base (el conteo lo pisa la lógica de corte en las rutas).
-- `ganador_id` / `finalizado_en` persisten en la fila finalizada.
-- `_migrar_emparejamientos(engine)` es idempotente (ADD COLUMN IF NOT EXISTS):
-  bases ya creadas (dev/prod) obtienen las columnas sin `create_all` alterar.
-
-PostgreSQL real (regla dura 4): mismos fixtures y estilo que
-test_unirse_autoempareja.py / test_emparejamientos.py.
-"""
-
 import uuid
 from datetime import datetime, timezone
 

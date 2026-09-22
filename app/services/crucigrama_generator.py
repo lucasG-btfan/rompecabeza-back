@@ -1,15 +1,3 @@
-"""
-Generador de Crucigramas.
-
-Colocación ortogonal (solo H y V), cruces perpendiculares con letra
-coincidente, rechazo de palabras fantasma y numeración estándar de pistas.
-
-Lógica pura (sin I/O), mismo patrón que `sopa_generator.py`. Las funciones
-de validación (`cabe_palabra`, `check_fantasma`, `puede_cruzar`) se exponen
-como API pública para que el editor manual (C-09) aplique exactamente la
-misma validación cruz y anti-fantasma (un solo punto de la verdad).
-"""
-
 import random
 
 ORIENTACIONES_CRUCE = {"H", "V"}
@@ -104,14 +92,7 @@ def check_fantasma(
     orientacion: str,
     colocadas: list[dict],
 ) -> bool:
-    """Rechaza colocaciones que forman palabras accidentales (fantasma):
-
-    1. Vecino perpendicular ocupado por una palabra PARALELA -> rechaza.
-       Solo se tolera si corresponde a una palabra perpendicular que cruza
-       en ese mismo punto (cruce legítimo).
-    2. Continuación en línea: la celda anterior a la primera y la posterior
-       a la última deben estar vacías (no pegarse a otra palabra paralela).
-    """
+    
     if orientacion not in ORIENTACIONES_CRUCE:
         return False
     dr, dc = DELTAS[orientacion]
@@ -139,14 +120,7 @@ def numerar_pistas(
     filas: int,
     columnas: int,
 ) -> tuple[dict, int]:
-    """Numeración estándar 1..N en barrido fila-major (arriba-izquierda).
-
-    Una celda recibe el siguiente número si inicia una palabra H o V en la
-    grilla normalizada; si inicia las dos, avanza una sola vez. Retorna
-    `(numeros, total)` donde `numeros` mapea el índice plano de la celda
-    (`fila * columnas + columna`, extremo inferior incluido, 0-based) al
-    número de pista; `total` es la cantidad de pistas.
-    """
+    
     inicios_h: set = set()
     inicios_v: set = set()
     for w in palabras:
@@ -182,14 +156,6 @@ def _generar_candidatos(palabra: str, colocadas: list[dict]) -> list[tuple]:
 
 
 def _palabras_aisladas(palabras: list[str]) -> list[str]:
-    """Palabras que no comparten NINGUNA letra con el resto (grafo de
-    compatibilidad desconectado): es imposible que crucen en un crucigrama.
-
-    Retorna las aisladas en el orden de entrada. Un crucigrama válido
-    requiere un grafo conexo (TODA palabra comparte al menos una letra con
-    alguna otra), así que basta con reportar las aisladas — si las hay, el
-    generador no tiene solución (C-11, defecto QA 6.7: mensaje honesto).
-    """
     palabras_por_letra: dict[str, list[str]] = {}
     for palabra in palabras:
         for letra in set(palabra):
@@ -254,13 +220,6 @@ def generar_crucigrama(
         colocadas: list[dict] = []
         exito = True
 
-        # C-11 (defecto QA 6.7): el ORDEN de colocación se baraja en CADA
-        # intento. Antes era un orden fijo (más larga primero) construido una
-        # vez fuera del loop y la resolubilidad dependía del orden en que el
-        # creador tipeaba las palabras (el set PERRO/GATO/AGUA/PAN/LUNA/CASA
-        # fallaba en 600 de 720 permutaciones). Con 500 intentos x órdenes
-        # barajados (mismo rng) el set del PO resuelve; el determinismo por
-        # seed se preserva (el rng consume la misma secuencia).
         ordenadas = sorted(palabras_norm, key=len, reverse=True)
         rng.shuffle(ordenadas)
 
@@ -304,9 +263,6 @@ def generar_crucigrama(
             break
 
     if resolucion is None:
-        # C-11 (defecto QA 6.7): mensaje honesto — el grafo es conexo (ya se
-        # validó arriba) pero el greedy aleatorizado agotó los intentos; el
-        # backtracking completo queda como mejora futura (diagnóstico opción 2).
         raise CrucigramaGeneratorError(
             f"No se pudo generar un crucigrama automático con estas palabras "
             f"en {MAX_INTENTOS} intentos. "
@@ -317,22 +273,7 @@ def generar_crucigrama(
 
 
 def construir_grilla(colocadas: list[dict]) -> tuple[dict, dict]:
-    """Construye la grilla final (contrato D6) desde un layout disperso.
 
-    Recibe las palabras colocadas (`{"palabra", "posicion", "orientacion"}`)
-    en coordenadas absolutas (pueden ser negativas), calcula el bounding box
-    mínimo, traslada todo a (0, 0), rellena las celdas vacías con negras y
-    numera las pistas 1..N en barrido fila-major.
-
-    Retorna:
-      - grilla: `{"celdas": [...], "palabras": [...]}` (contrato D6)
-      - posiciones: `{palabra_limpia: {"fila", "columna", "orientacion", "numero"}}`
-
-    La comparten el generador (`generar_crucigrama`) y el editor manual
-    del crucigrama (C-09, `construir_layout`): un solo punto de la verdad
-    para el shape final de la grilla. Lanza `CrucigramaGeneratorError` si el
-    bounding box excede `GRILLA_MAXIMA`.
-    """
     todas_las_celdas = []
     for w in colocadas:
         todas_las_celdas.extend(cruzar(w["posicion"], w["palabra"], w["orientacion"]))

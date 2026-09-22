@@ -76,18 +76,12 @@ def _validar_y_normalizar(
 
 
 def _estado_response(db: Session, partida: Partida) -> EstadoPartidaResponse:
-    """Fotografía de la partida SIN progreso por jugador (C-14): todas las
-    palabras salen `encontrada=False` / `posicion=None` y en crucigrama la
-    grilla viaja siempre ciega (ninguna letra revelada). `db` se conserva en
-    la firma por compatibilidad con los llamadores (editor.py)."""
     es_crucigrama = partida.tipo == "crucigrama"
     palabras_estado = []
     for p in partida.palabras:
-        # C-10 (D2): en crucigrama la solución no se expone en el estado de la
-        # palabra; el numero de pista sí (lo necesita el panel de pistas).
         numero = None
         if es_crucigrama and p.posicion:
-            numero = p.posicion.get("numero")  # D3: null defensivo si falta
+            numero = p.posicion.get("numero")  
         palabras_estado.append(
             EstadoPalabraResponse(
                 id=p.id,
@@ -116,18 +110,7 @@ def _sanitizar_grilla_crucigrama(
     grilla: dict,
     posiciones_por_palabra: dict[uuid.UUID, dict],
 ) -> dict:
-    """Copia la grilla del crucigrama ocultando TODAS las letras que no
-    pertenecen a palabras encontradas por ESTA participación (anti-cheat C-10).
-
-    Se conserva la geometría completa del puzzle: celdas negras, numeros de
-    pista, tipos y hasta las celdas de letra (con su letra en null). El
-    panel de pistas y el tablero siguen siendo legibles sin la solución.
-    `texto` de cada palabra de la grilla va null por la misma razón.
-
-    Las palabras encontradas se matchean contra las de la grilla por su
-    posición de inicio (fila, columna, orientacion) — la posición de un
-    hallazgo es una copia de la de la palabra, con el mismo numero de pista.
-    """
+    
     encontradas_por_inicio = {
         (pos["fila"], pos["columna"], pos["orientacion"]): pos.get("numero")
         for pos in posiciones_por_palabra.values()

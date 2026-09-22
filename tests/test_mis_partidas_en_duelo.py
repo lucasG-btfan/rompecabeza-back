@@ -1,15 +1,3 @@
-"""
-Tests de los flags `en_duelo`/`en_espera` en "Mis partidas" (C-17 D10 + C-23 D1).
-
-GET /api/partidas — `ResumenPartidaResponse` expone `en_duelo: bool` y
-`en_espera: bool` (aditivo):
-- C-23 (D1): `en_duelo` true SOLO con duelo formado (`emparejado`);
-  `en_espera` true SOLO con espera de rival pendiente (`esperando`)
-- `false` sin fila activa (campos presentes en TODOS los ítems — aditivos)
-
-PostgreSQL real (regla dura 4): helpers estilo test_emparejamientos.py.
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient
@@ -60,8 +48,6 @@ def _crear_y_activar(client, prefijo, db_sesion):
 
 
 def test_mis_partidas_espera_en_espera_true(client, db_sesion):
-    """C-23 (4.1, redefine la semántica vieja): creador con partida que tiene
-    una espera de rival activa → `en_espera: true` y `en_duelo: false`."""
     c_creador, _ = _client_nuevo("md1cr")
     c_a, _ = _client_nuevo("md1a")
     try:
@@ -82,8 +68,6 @@ def test_mis_partidas_espera_en_espera_true(client, db_sesion):
 
 
 def test_mis_partidas_duelo_formado_en_duelo_true(client, db_sesion):
-    """C-23 (3.1): creador con partida en duelo FORMADO (`emparejado`) →
-    `en_duelo: true` y `en_espera: false` (contrato previo intacto)."""
     c_creador, _ = _client_nuevo("md4cr")
     c_a, _ = _client_nuevo("md4a")
     c_b, _ = _client_nuevo("md4b")

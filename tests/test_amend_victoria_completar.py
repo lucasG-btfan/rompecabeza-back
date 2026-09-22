@@ -1,26 +1,3 @@
-"""
-AMEND feedback PO (2026-09-19) — CAMBIO 1 + CAMBIO 4 (spec `emparejamientos`).
-
-CAMBIO 1 — La condición de victoria cambió: ya NO corta por SUMA de contadores
-(permitía doble conteo: ambos encontraban la misma palabra y la suma llegaba al
-total sin que nadie lo completara). NUEVA regla: gana el PRIMERO que llega a
-`len(partida.palabras)` con SU contador propio. El ganador ES quien completó
-(no el de mayoría). El ejemplo viejo del PO (12 palabras, 7-5) queda
-INVALIDADO y se triangula acá: 7+5 == 12 pero nadie tiene 12 → NO corta.
-
-CAMBIO 4 — La partida ya NO se consume al finalizar el duelo (D7 revisada):
-`_finalizar_duelo` NO escribe `partida.estado = "finalizado"`. La partida
-sigue `activo`, vuelve al lobby SIN badge `en_duelo` y se puede volver a
-jugar con OTRO 1v1 (pool infinito, decisión (c) del PO).
-
-El empate (`ganador_id` None) queda como CASO TEÓRICO (aún documentado en el
-poll, `test_duelo_finalizado_poll.py`): con `SELECT ... FOR UPDATE` el primero
-en completar finaliza y el otro ve la fila `finalizado` en la carrera — el
-empate por corte es inalcanzable, pero el contrato lo soporta.
-
-PostgreSQL real (regla dura 4): fixtures `client`/`db_sesion` de conftest.
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient
@@ -30,7 +7,6 @@ from app.models import Partida
 from app.models.emparejamiento import Emparejamiento
 from app.services.sopa_generator import calcular_celda_final
 
-# 12 palabras cortas (misma lista que test_cierre_duelo_jugadas.py).
 PALABRAS_12 = [
     {"palabra": "CASA", "explicacion": "Vivienda"},
     {"palabra": "SOL", "explicacion": "Astro"},
@@ -45,11 +21,6 @@ PALABRAS_12 = [
     {"palabra": "PLAYA", "explicacion": "Costa"},
     {"palabra": "ARENA", "explicacion": "Granos"},
 ]
-
-
-# ---------------------------------------------------------------------------
-# Helpers (mismo patrón que test_cierre_duelo_jugadas.py)
-# ---------------------------------------------------------------------------
 
 
 def _client_nuevo(prefijo="amend12"):
@@ -123,15 +94,9 @@ def _marcar(client, db_sesion, codigo, texto):
     )
 
 
-# ---------------------------------------------------------------------------
-# CAMBIO 1 — Victoria por completar INDIVIDUAL
-# ---------------------------------------------------------------------------
 
 
 def test_primero_en_completar_individual_gana(client, db_sesion):
-    """12 palabras, J1=11 y J2=11: la jugada de J2 lo lleva a 12/12 EN SOLITARIO
-    → gana J2 (el que completó, no el de mayoría). La partida NO se consume
-    (queda `activo`). La respuesta de la jugada que corta trae `gane: true`."""
     c_creador, _ = _client_nuevo("v1cr")
     c_a, username_a = _client_nuevo("v1a")
     c_b, _ = _client_nuevo("v1b")
@@ -232,9 +197,6 @@ def test_jugador_que_llega_a_total_corta_el_duelo(client, db_sesion):
         c_b.close()
 
 
-# ---------------------------------------------------------------------------
-# CAMBIO 4 — La partida NO se consume: vuelve al lobby y se re-juega
-# ---------------------------------------------------------------------------
 
 
 def test_partida_vuelve_al_lobby_sin_badge_post_duelo(client, db_sesion):
@@ -247,7 +209,6 @@ def test_partida_vuelve_al_lobby_sin_badge_post_duelo(client, db_sesion):
     try:
         codigo = _crear_y_publicar(c_creador)
 
-        # Duelo jugado y resuelto por abandono (C-19 D4).
         _duelo_emparejado(c_creador, c_a, c_b, codigo)
         res = c_b.post(
             "/api/emparejamientos/abandonar", json={"codigo_partida": codigo}

@@ -1,17 +1,3 @@
-"""
-Tests de la vista pública por ROL (C-12, D1 + D1 REVISADO): `GET /partidas/{codigo}`.
-
-Regla (spec `partidas-vista-publica`): el creador autenticado ve la solución del
-crucigrama (el editor C-09 la necesita) y recibe `es_creador: true`; cualquier
-no-creador (jugador registrado o invitado anónimo) la recibe oculta
-(`palabra`/`texto_mostrar` null) y `es_creador: false`. La `explicacion`
-(pista) es pública para todos y la `posicion` sigue las reglas previas (solo
-palabras encontradas). La sopa queda INTACTA: su lista de palabras ES el juego,
-nadie oculta nada (regresión C-03), y `es_creador` refleja el rol igual.
-
-Mismos fixtures (PostgreSQL real) y estilo que `test_crucigrama_juego.py`.
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient
@@ -61,8 +47,6 @@ def _finalizar(client, codigo):
 
 
 def _crucigrama_pato(client):
-    """Partida crucigrama PATO/ORO/AS finalizada (layout determinista C-09,
-    ver docstring de test_crucigrama_juego.py)."""
     codigo = _crear_partida(
         client,
         "crucigrama",
@@ -83,7 +67,6 @@ def _crucigrama_pato(client):
 
 
 def _sopa(client):
-    """Partida sopa finalizada (CASA/SOL, regresión C-03)."""
     codigo = _crear_partida(
         client,
         "sopa",
@@ -113,7 +96,6 @@ def test_publica_crucigrama_creador_ve_solucion(client):
     por_texto = {p["palabra"]: p for p in body["palabras"]}
     assert set(por_texto) == {"PATO", "ORO", "AS"}
     assert por_texto["PATO"]["texto_mostrar"] == "PATO"
-    # La posicion de una palabra NO encontrada sigue oculta (regla previa C-03).
     assert all(p["posicion"] is None for p in body["palabras"])
 
 
@@ -153,10 +135,6 @@ def test_publica_crucigrama_invitado_anonimo_oculta_solucion(client):
         anon.close()
 
 
-# ---------------------------------------------------------------------------
-# Sopa: intacta para todos (regresión C-03) + es_creador por rol (D1 revisado)
-# ---------------------------------------------------------------------------
-
 
 def test_publica_sopa_creador_ve_palabras_y_es_creador(client):
     """En sopa el creador ve la lista (la lista ES el juego) y es_creador true."""
@@ -173,7 +151,7 @@ def test_publica_sopa_creador_ve_palabras_y_es_creador(client):
 
 
 def test_publica_sopa_invitado_ve_palabras_y_es_creador_false(client):
-    """La sopa NO oculta su lista a nadie (regresión C-03); es_creador false."""
+    
     codigo = _sopa(client)
 
     anon = TestClient(app)

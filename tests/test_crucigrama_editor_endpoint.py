@@ -1,18 +1,3 @@
-"""
-Tests de endpoint del editor manual de crucigramas (C-09).
-
-PostgreSQL real (regla dura): mismos fixtures y estilo que
-`test_finalizar_crucigrama.py` — registrar usuario + crear partida y resolver
-por GET público. Cubren el PUT de posicion con sus validaciones (estado,
-orientación H/V, díada cabida/anti-fantasma), el GET /editor y el finalizar
-híbrido (manual completo / parcial / automático).
-
-REVISIÓN 9.x (decisión post-QA, opción C): se eliminó la conectividad
-obligatoria y se aceptan coordenadas negativas en crucigrama. Los casos 4.8
-(palabra posterior sin cruce) y 4.9 (movida que desconecta) se INVIERTEN a
-200, y se agregan los casos de coordenadas negativas (crucigrama 200 / sopa
-400).
-"""
 
 import uuid
 
@@ -262,9 +247,6 @@ def test_posicion_coordenadas_negativas_200(client, db_sesion):
     assert sol_db.posicion == {"fila": -2, "columna": 9, "orientacion": "V"}
 
 
-# --- DELETE posicion (C-11, BUG 2: sacar palabra del layout manual) ----------
-
-
 def _quitar_posicion(client, codigo, palabra_id):
     return client.delete(f"/api/partidas/{codigo}/palabras/{palabra_id}/posicion")
 
@@ -356,13 +338,7 @@ def test_get_editor_200_creador_con_posiciones(client, db_sesion):
 
 
 def test_get_editor_incluye_nombre(client):
-    """C-15: el editor del creador incluye el `nombre` persistido (read-only).
 
-    Escenario del spec `partida-nombre`: "Editor del creador incluye nombre".
-    El editor se construye con EditorPartidaResponse; si no se pasa
-    `nombre=partida.nombre` el default del schema serializa null aunque la
-    partida tenga nombre asignado.
-    """
     codigo = _crear_partida(client, "crucigrama", PALABRAS_CASA_SOL_LUNA)
 
     res = client.patch(f"/api/partidas/{codigo}/nombre", json={"nombre": "Tema Navidad"})
@@ -443,8 +419,7 @@ def test_finalizar_layout_parcial_400(client):
 
 
 def test_finalizar_sin_posiciones_generacion_automatica(client, db_sesion):
-    # Regresión del comportamiento C-08: sin posiciones manuales el generador
-    # automático arma la grilla como siempre.
+    
     codigo = _crear_partida(client, "crucigrama", PALABRAS_CASA_SOL_LUNA)
 
     res = client.post(f"/api/partidas/{codigo}/finalizar")

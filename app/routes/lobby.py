@@ -1,16 +1,3 @@
-"""
-Rutas del lobby (C-17, D5) — listado público de partidas activas.
-
-GET /api/lobby/partidas (anti-cheat): solo `codigo`, `tipo`,
-`cantidad_palabras`, `nombre`, `en_duelo` y `en_espera`. Accesible sin sesión;
-con sesión excluye solo las partidas con su duelo activo propio (AMEND CAMBIO 3
-— DD-07 reemplazado: el creador ya NO está excluido de su partida). Las esperas
-vencidas se reciclan ANTES de calcular los flags (D4:
-`_reciclar_esperas_vencidas` se importa de emparejamientos). C-23 (D1/D3):
-`en_duelo` = solo duelo formado (`emparejado`); `en_espera` = solo espera de
-rival pendiente (`esperando`).
-"""
-
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -35,17 +22,6 @@ def listar_partidas_lobby(
     db: Session = Depends(get_db),
     usuario: Optional[Usuario] = Depends(get_usuario_opcional),
 ):
-    """Partidas `activo` ordenadas por `creado_en` desc (más reciente primero).
-
-    Exclusión si hay sesión (AMEND CAMBIO 3 — DD-07 reemplazado): solo
-    partidas donde el usuario tiene un duelo propio activo
-    (`esperando|emparejado`) — el duelo es privado para sus protagonistas.
-    El creador YA ve su propia partida (puede jugar el 1v1). Invitado (sin
-    sesión): ve TODO lo activo.
-
-    Anti-cheat: solo metadatos. `cantidad_palabras` = `len(partida.palabras)`
-    es el único dato derivado (no filtra la solución).
-    """
     _reciclar_esperas_vencidas(db)
 
     partidas = (
@@ -69,16 +45,10 @@ def listar_partidas_lobby(
         }
 
         def _incluir(partida: Partida) -> bool:
-            # DD-07 fue reemplazado por el AMEND c-19 (2026-09-19): el creador
-            # SÍ ve y puede jugar 1v1 su propia partida. Solo se excluyen
-            # partidas donde el usuario tiene un duelo propio VIVO.
             return partida.id not in codigos_con_duelo_propio
 
         partidas = [p for p in partidas if _incluir(p)]
 
-    # C-23 (D3): una sola query en lote trae (partida_id, estado) y se
-    # particiona en Python — `emparejado` → en_duelo, `esperando` → en_espera.
-    # No se reutiliza `_partida_en_duelo` por ítem para no caer en N+1.
     ids_en_duelo: set = set()
     ids_en_espera: set = set()
     if partidas:

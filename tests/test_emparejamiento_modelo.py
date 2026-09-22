@@ -1,21 +1,3 @@
-"""
-Tests del modelo `Emparejamiento` (C-17, D1) — spec `emparejamientos`,
-requisito "Modelo de emparejamientos con restricciones de integridad".
-
-PostgreSQL real (regla dura 4): mismos fixtures y estilo de
-`test_renombrar_partida.py` / `test_crear_partida_nombre.py`. Sin mocks.
-
-Cubre:
-- Defaults al crear una fila `esperando`.
-- Índice UNIQUE parcial `uq_emparejamiento_partida_activo`: una sola fila
-  activa (`esperando`|`emparejado`) por partida → IntegrityError.
-- Índice UNIQUE parcial `uq_emparejamiento_jugador1_esperando`: un usuario
-  espera a lo sumo en una partida → IntegrityError.
-- Una fila `cancelado` convive con la fila activa de la misma partida.
-- Un usuario puede estar `esperando` en una partida y `emparejado` en otra
-  a la vez (los índices no se pisan).
-"""
-
 import uuid
 
 import pytest

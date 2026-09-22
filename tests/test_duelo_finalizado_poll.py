@@ -1,27 +1,3 @@
-"""
-Estado `finalizado` en el polling + lobby (C-19, D5/D6 — spec `emparejamientos`).
-
-Requisito "Resultado del duelo en el polling":
-
-- duelo finalizado → `GET /api/emparejamientos/estado` responde
-  `{estado: "finalizado", resultado: DueloResultadoResponse}` normalizado por
-  requester (el perdedor ve su contador como `yo_palabras` y `gane: false`).
-- **estable (D6)**: a diferencia de `cancelado`/`expirado`, la rama
-  `finalizado` NO consume la fila — la segunda consulta repite MISMA respuesta.
-- el ganador consulta → `gane: true`.
-- empate → `gane: null`.
-- una fila `finalizado` seguida de una fila NUEVA del usuario (otra espera) →
-  el poll reporta la fila más reciente (`esperando`), no el resultado viejo
-  (`_ultima_fila_de` ordena por `creado_en` desc).
-- abandono sin `iniciado_en` (borde D9/D14) → `tiempo_total_seg: 0`.
-- (extra, same spec `lobby`) `partida.en_duelo` es False cuando el duelo
-  terminó — la partida ya no está ocupada por un duelo activo.
-- C-23 (D7): en estado `esperando` el objeto `partida` viaja con
-  `en_duelo: false` + `en_espera: true` (una espera no es un duelo formado).
-
-PostgreSQL real (regla dura 4): fixtures `client`/`db_sesion` de conftest.
-"""
-
 import uuid
 from datetime import datetime, timezone
 
@@ -35,11 +11,6 @@ PALABRAS = [
     {"palabra": "CASA", "explicacion": "Vivienda"},
     {"palabra": "SOL", "explicacion": "Astro"},
 ]
-
-
-# ---------------------------------------------------------------------------
-# Helpers (mismo patrón que test_cierre_duelo_jugadas.py)
-# ---------------------------------------------------------------------------
 
 
 def _client_nuevo(prefijo="pl"):
@@ -183,8 +154,6 @@ def test_poll_ganador_gane_true(client, db_sesion):
 
 
 def test_poll_empate_gane_null(client, db_sesion):
-    """Duelo finalizado en empate (`ganador_id` NULL, p. ej. corte por suma
-    igual) → poll con `resultado.gane == null` para ambos."""
     c_creador, _ = _client_nuevo("p4cr")
     c_a, _ = _client_nuevo("p4a")
     c_b, _ = _client_nuevo("p4b")
@@ -212,8 +181,6 @@ def test_poll_empate_gane_null(client, db_sesion):
 
 
 def test_poll_tras_finalizado_reporta_fila_nueva(client, db_sesion):
-    """Una fila `finalizado` NO tapa la siguiente: si el usuario crea una
-    espera nueva, el poll (última fila por `creado_en`) reporta `esperando`."""
     c_creador, _ = _client_nuevo("p5cr")
     c_a, _ = _client_nuevo("p5a")
     c_b, _ = _client_nuevo("p5b")
@@ -238,8 +205,6 @@ def test_poll_tras_finalizado_reporta_fila_nueva(client, db_sesion):
 
 
 def test_poll_abandono_sin_iniciar_tiempo_cero(client, db_sesion):
-    """Borde D9/D14: duelo `emparejado` sin `iniciado_en` (nadie entró) que un
-    jugador abandona → `finalizado` con `tiempo_total_seg: 0` en el poll."""
     c_creador, _ = _client_nuevo("p6cr")
     c_a, _ = _client_nuevo("p6a")
     c_b, _ = _client_nuevo("p6b")
@@ -262,15 +227,8 @@ def test_poll_abandono_sin_iniciar_tiempo_cero(client, db_sesion):
         c_b.close()
 
 
-# ---------------------------------------------------------------------------
-# C-23: flags del objeto `partida` en el poll (D7)
-# ---------------------------------------------------------------------------
-
 
 def test_poll_esperando_reporte_en_espera(client, db_sesion):
-    """C-23 (3.4/D7): en estado `esperando` el objeto `partida` del poll viaja
-    con `en_duelo: false` + `en_espera: true` — la espera PROPIA se reporta
-    como espera, no como duelo formado."""
     c_creador, _ = _client_nuevo("p7cr")
     c_a, _ = _client_nuevo("p7a")
     try:
@@ -289,8 +247,6 @@ def test_poll_esperando_reporte_en_espera(client, db_sesion):
 
 
 def test_poll_emparejado_reporte_en_duelo(client, db_sesion):
-    """C-23 (3.1/D7): en estado `emparejado` el objeto `partida` viaja con
-    `en_duelo: true` + `en_espera: false`."""
     c_creador, _ = _client_nuevo("p8cr")
     c_a, _ = _client_nuevo("p8a")
     c_b, _ = _client_nuevo("p8b")

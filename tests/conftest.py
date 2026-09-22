@@ -20,11 +20,10 @@ from app.models.emparejamiento import _migrar_emparejamientos
 
 TEST_DB_NAME = "rompecabezas_test"
 
-# Orden para el TRUNCATE: hijos antes que padres, CASCADE como red de seguridad.
 TABLAS_A_LIMPIAR = [
     "hallazgos",
     "participaciones",
-    "emparejamientos",  # C-17: referencia partidas y usuarios
+    "emparejamientos",  
     "palabras",
     "partidas",
     "usuarios",
@@ -53,8 +52,6 @@ def db_engine():
 
     engine = create_engine(url_test, pool_pre_ping=True)
     Base.metadata.create_all(bind=engine)
-    # C-19: create_all no altera tablas existentes; la migración agrega las
-    # columnas de conteo del duelo cuando la base ya existía del cambio C-17.
     _migrar_emparejamientos(engine)
     yield engine
     Base.metadata.drop_all(bind=engine)

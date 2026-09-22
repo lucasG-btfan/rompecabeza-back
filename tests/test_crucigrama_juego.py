@@ -1,21 +1,3 @@
-"""
-Tests del crucigrama JUGABLE (C-10): endpoint `PUT /palabras/{id}/respuesta`
-y sanitización del `GET /estado` para crucigrama (anti-cheat de letras).
-
-PostgreSQL real (regla dura): mismos fixtures y estilo que
-`test_crucigrama_editor_endpoint.py`. La grilla del ejemplo PATO/ORO/AS usa el
-layout manual determinista de C-09 (3 filas x 4 columnas):
-
-    P A T O    PATO H (0,0) -> numero 1
-      S   R    AS   V (0,1) -> numero 2
-          O    ORO  V (0,3) -> numero 3
-
-Celdas (índice plano = fila*4 + columna):
-    idx 0 (0,0) P  | idx 1 (0,1) A  | idx 2 (0,2) T  | idx 3 (0,3) O
-    idx 4 (1,0) -  | idx 5 (1,1) S  | idx 6 (1,2) -  | idx 7 (1,3) R
-    idx 8 (2,0) -  | idx 9 (2,1) -  | idx10 (2,2) -  | idx11 (2,3) O
-"""
-
 import uuid
 
 from fastapi.testclient import TestClient
@@ -98,8 +80,6 @@ def _respuesta(client, codigo, palabra_id, letras):
 
 
 def test_respuesta_acierto_registrado_feliz(client, db_sesion):
-    """Acierto de jugador registrado: 200 + posicion, SIN participación de
-    jugador ni hallazgo (progreso efímero C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     _registrar(client, prefijo="c10b")  # jugador B (la cookie del creador se reemplaza)
@@ -119,8 +99,6 @@ def test_respuesta_acierto_registrado_feliz(client, db_sesion):
 
 
 def test_respuesta_completa_sin_finalizacion(client, db_sesion):
-    """Completar las 3 palabras responde 200 para todas, sin participación de
-    jugador ni finalización: el backend no persiste progreso (C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     oro = _palabra_id(client, codigo, "ORO")
@@ -257,8 +235,6 @@ def test_respuesta_campo_extra_422(client):
 
 
 def test_respuesta_reintento_no_duplica_nada(client, db_sesion):
-    """Responder dos veces la misma palabra responde 200 ambas veces sin
-    efectos en la base: ya no hay hallazgo que duplicar (C-14)."""
     codigo = _crucigrama_pato(client)
     as_ = _palabra_id(client, codigo, "AS")
     _registrar(client, prefijo="c10f")
@@ -318,8 +294,6 @@ def test_estado_crucigrama_sin_progreso_sanitizado(client):
 
 
 def test_estado_crucigrama_siempre_ciego(client):
-    """Tras responder PATO correctamente, el estado sigue 100% ciego para el
-    mismo jugador: sin descubrimiento progresivo (C-14)."""
     codigo = _crucigrama_pato(client)
     pato = _palabra_id(client, codigo, "PATO")
     _registrar(client, prefijo="c10g")
@@ -356,8 +330,6 @@ def test_estado_crucigrama_numero_null_defensivo(client, db_sesion):
 
 
 def test_estado_sopa_sin_cambios_regresion(client):
-    """Regresión: la sopa sigue devolviendo grilla string[][] con sus letras
-    visibles y EstadoPalabraResponse con palabra (comportamiento C-05 intacto)."""
     codigo = _crear_partida(
         client,
         "sopa",

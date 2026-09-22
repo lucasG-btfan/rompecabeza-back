@@ -1,15 +1,3 @@
-"""nombre de partida - etiqueta opcional del creador
-
-Agrega la columna `partidas.nombre` (VARCHAR(50) NULL) para que el creador
-pueda etiquetar su partida y distinguirla en "Mis partidas" (C-15).
-
-Aditiva y SIN backfill: las partidas existentes quedan con NULL y el
-frontend muestra el código como fallback. El nombre no afecta el juego.
-
-Revision ID: 0004_nombre_partida
-Revises: 0003_hallazgos
-Create Date: 2026-09-17
-"""
 from alembic import op
 import sqlalchemy as sa
 
